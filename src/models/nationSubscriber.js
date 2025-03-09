@@ -23,9 +23,7 @@ async function subscribeToNationUpdates() {
 
         channel.bind('BULK_NATION_UPDATE', (data) => {
             console.log('Received BULK_NATION_UPDATE:', data);
-            data.forEach((update) => {
-                apiService.sendUpdate('nation', update);
-            });
+            apiService.sendUpdate('nation', data);
         });
     } catch (error) {
         console.error('Failed to subscribe to nation updates:', error);

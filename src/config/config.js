@@ -6,5 +6,5 @@ module.exports = {
     pusherSocketHost: process.env.PUSHER_SOCKET_HOST,
     pwAuthUrl: process.env.PW_AUTH_URL,
     nexusApiUrl: process.env.NEXUS_API_URL,
-    nexusApiToken: process.env.NEXUS_API_URL,
+    nexusApiToken: process.env.NEXUS_API_TOKEN,
 };
