@@ -1,7 +1,7 @@
 const axios = require('axios');
 const apiService = require('../services/apiService');
 const config = require('../config/config');
-const {subscribeToNationUpdates} = require('./nationSubscriber');
+const {subscribe} = require('./subscriber');
 
 async function fetchSnapshot(model) {
   try {
@@ -36,7 +36,8 @@ function startSnapshotScheduler() {
 
 // Initialize subscriptions and start snapshot scheduler
 function initializeSubscriptions() {
-  subscribeToNationUpdates();
+  subscribe('nation', 'create');
+  // subscribe('nation', 'update');
   // startSnapshotScheduler();
 }
 

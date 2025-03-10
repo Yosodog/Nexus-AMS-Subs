@@ -2,10 +2,10 @@ const axios = require('axios');
 const config = require('../config/config');
 
 const apiService = {
-  async sendUpdate(model, data) {
+  async sendUpdate(model, event, data) {
     try {
       await axios.post(
-          `${config.nexusApiUrl}/${model}/update`,
+          `${config.nexusApiUrl}/${model}/${event}`,
           data,
           {
             headers: {
@@ -13,9 +13,9 @@ const apiService = {
             },
           },
       );
-      console.log(`Successfully sent update for ${model}`);
+      console.log(`Successfully sent ${event} for ${model}`);
     } catch (error) {
-      console.error(`Failed to send update for ${model}:`, error.message);
+      console.error(`Failed to send ${event} for ${model}:`, error.message);
     }
   },
 };
