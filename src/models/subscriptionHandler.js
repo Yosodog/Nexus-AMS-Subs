@@ -39,6 +39,9 @@ function initializeSubscriptions() {
   subscribe('nation', 'create');
   subscribe('nation', 'update');
   subscribe('nation', 'delete');
+  subscribe('alliance', 'update');
+  subscribe('alliance', 'create');
+  subscribe('alliance', 'delete');
   // startSnapshotScheduler();
 }
 
