@@ -42,7 +42,10 @@ function initializeSubscriptions() {
   subscribe('alliance', 'update');
   subscribe('alliance', 'create');
   subscribe('alliance', 'delete');
-  // startSnapshotScheduler();
+  subscribe('city', 'update');
+  subscribe('city', 'create');
+  subscribe('city', 'delete');
+  startSnapshotScheduler();
 }
 
 module.exports = {initializeSubscriptions, startSnapshotScheduler};
