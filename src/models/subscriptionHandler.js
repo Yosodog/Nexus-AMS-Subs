@@ -45,7 +45,7 @@ function initializeSubscriptions() {
   subscribe('city', 'update');
   subscribe('city', 'create');
   subscribe('city', 'delete');
-  startSnapshotScheduler();
+  // startSnapshotScheduler();
 }
 
 module.exports = {initializeSubscriptions, startSnapshotScheduler};
