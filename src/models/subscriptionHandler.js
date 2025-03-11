@@ -37,7 +37,8 @@ function startSnapshotScheduler() {
 // Initialize subscriptions and start snapshot scheduler
 function initializeSubscriptions() {
   subscribe('nation', 'create');
-  // subscribe('nation', 'update');
+  subscribe('nation', 'update');
+  subscribe('nation', 'delete');
   // startSnapshotScheduler();
 }
 
