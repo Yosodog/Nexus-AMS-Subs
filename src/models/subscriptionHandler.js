@@ -10,7 +10,7 @@ async function fetchSnapshot(model) {
         {
           headers: {
             'Authorization': `Bearer ${config.pwApiToken}`,
-            'Accept': 'application/json', // Change to 'text/csv' or 'application/msgpack' if needed
+            'Accept': 'application/json'
           },
         },
     );

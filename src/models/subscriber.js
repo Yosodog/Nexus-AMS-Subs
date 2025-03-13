@@ -19,12 +19,10 @@ async function subscribe(model, event) {
     let eventName = `${model.toUpperCase()}_${event.toUpperCase()}`;
 
     channel.bind(eventName, (data) => {
-      console.log(`Received ${eventName}`, data);
       apiService.sendUpdate(model, event, data);
     });
 
     channel.bind(`BULK_${eventName}`, (data) => {
-      console.log(`Received BULK_${eventName}`, data);
       apiService.sendUpdate(model, event, data);
     });
   } catch (error) {
