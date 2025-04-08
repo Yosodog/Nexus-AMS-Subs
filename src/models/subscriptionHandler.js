@@ -45,6 +45,9 @@ function initializeSubscriptions() {
   subscribe('city', 'update');
   subscribe('city', 'create');
   subscribe('city', 'delete');
+  subscribe('war', 'update');
+  subscribe('war', 'create');
+  subscribe('war', 'delete');
   // startSnapshotScheduler();
 }
 
