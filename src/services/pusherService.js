@@ -5,11 +5,22 @@ let pusherInstance;
 
 const getPusherInstance = () => {
   if (!pusherInstance) {
-    pusherInstance = new Pusher('a22734a47847a64386c8', {
+    pusherInstance = new Pusher(config.pusherAppKey, {
       wsHost: config.pusherSocketHost,
       authEndpoint: config.pwAuthUrl,
       disableStats: true,
-      cluster: 'abc',
+      cluster: config.pusherCluster,
+      forceTLS: true,
+      enabledTransports: ['ws', 'wss'],
+      auth: {
+        headers: {
+          Authorization: `Bearer ${config.pwApiToken}`,
+        },
+      },
+    });
+
+    pusherInstance.connection.bind('connected', () => {
+      console.log('Connected to Pusher.');
     });
 
     pusherInstance.connection.bind('disconnected', () => {
@@ -18,6 +29,10 @@ const getPusherInstance = () => {
         console.log('Attempting to reconnect to Pusher...');
         pusherInstance.connect();
       }, 10000);
+    });
+
+    pusherInstance.connection.bind('error', (event) => {
+      console.error('Pusher connection error:', event);
     });
   }
 
@@ -39,4 +54,16 @@ const unsubscribeFromChannel = (channelName) => {
   }
 };
 
-module.exports = {getPusherInstance, subscribeToChannel, unsubscribeFromChannel};
+const shutdownPusher = () => {
+  if (pusherInstance) {
+    pusherInstance.disconnect();
+    pusherInstance = undefined;
+  }
+};
+
+module.exports = {
+  getPusherInstance,
+  subscribeToChannel,
+  unsubscribeFromChannel,
+  shutdownPusher,
+};
