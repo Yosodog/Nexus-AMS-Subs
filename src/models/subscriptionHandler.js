@@ -1,54 +1,86 @@
 const axios = require('axios');
-const apiService = require('../services/apiService');
+const {sendUpdate} = require('../services/apiService');
 const config = require('../config/config');
 const {subscribe} = require('./subscriber');
+const {formatAxiosError} = require('../utils/error');
+
+const SNAPSHOT_MODELS = config.snapshotModels;
 
 async function fetchSnapshot(model) {
   try {
     const response = await axios.get(
-        `https://api.politicsandwar.com/subscriptions/v1/snapshot/${model}?api_key=${config.pwApiToken}`,
+        `${config.pwSnapshotUrl}/${model}?api_key=${config.pwApiToken}`,
         {
           headers: {
-            'Authorization': `Bearer ${config.pwApiToken}`,
-            'Accept': 'application/json'
+            Authorization: `Bearer ${config.pwApiToken}`,
+            Accept: 'application/json',
           },
+          timeout: 30000,
         },
     );
 
-    console.log(`Fetched snapshot for ${model}:`, response.data);
+    const payload = response.data;
+    const sizeDescription = Array.isArray(payload)
+      ? `${payload.length} records`
+      : `${Object.keys(payload || {}).length} fields`;
+    console.log(`Fetched snapshot for ${model} (${sizeDescription}).`);
 
     // Send data to Nexus AMS
-    apiService.sendUpdate(model, response.data);
+    await sendUpdate(model, 'snapshot', payload);
   } catch (error) {
-    console.error(`Failed to fetch snapshot for ${model}:`, error.message);
+    const formattedError = formatAxiosError(error);
+    console.error(`Failed to fetch snapshot for ${model}: ${formattedError}`);
   }
 }
 
 function startSnapshotScheduler() {
-  console.log('Fetching initial snapshot...');
-  fetchSnapshot('nation'); // Run immediately when the app starts
+  if (!config.enableSnapshots) {
+    console.log('Snapshots disabled via configuration.');
+    return;
+  }
+
+  const intervalMs = Math.max(config.snapshotIntervalMinutes, 1) * 60 * 1000;
+
+  console.log('Fetching initial snapshots...');
+  SNAPSHOT_MODELS.forEach((model) => {
+    fetchSnapshot(model).catch((error) => {
+      const formattedError = formatAxiosError(error);
+      console.error(`Initial snapshot failed for ${model}: ${formattedError}`);
+    });
+  });
 
   setInterval(() => {
-    console.log('Fetching hourly snapshot...');
-    fetchSnapshot('nation'); // Runs every hour after the initial run
-  }, 60 * 60 * 1000); // 60 minutes * 60 seconds * 1000 milliseconds
+    console.log('Fetching scheduled snapshots...');
+    SNAPSHOT_MODELS.forEach((model) => {
+      fetchSnapshot(model).catch((error) => {
+        const formattedError = formatAxiosError(error);
+        console.error(`Scheduled snapshot failed for ${model}: ${formattedError}`);
+      });
+    });
+  }, intervalMs);
 }
 
 // Initialize subscriptions and start snapshot scheduler
 function initializeSubscriptions() {
-  subscribe('nation', 'create');
-  subscribe('nation', 'update');
-  subscribe('nation', 'delete');
-  subscribe('alliance', 'update');
-  subscribe('alliance', 'create');
-  subscribe('alliance', 'delete');
-  subscribe('city', 'update');
-  subscribe('city', 'create');
-  subscribe('city', 'delete');
-  subscribe('war', 'update');
-  subscribe('war', 'create');
-  subscribe('war', 'delete');
-  // startSnapshotScheduler();
+  const subscriptionMatrix = {
+    nation: ['create', 'update', 'delete'],
+    alliance: ['create', 'update', 'delete'],
+    city: ['create', 'update', 'delete'],
+    war: ['create', 'update', 'delete'],
+  };
+
+  Object.entries(subscriptionMatrix).forEach(([model, events]) => {
+    events.forEach((event) => {
+      subscribe(model, event).catch((error) => {
+        const formattedError = formatAxiosError(error);
+        console.error(
+            `Unexpected error bootstrapping subscription for ${model}:${event}: ${formattedError}`,
+        );
+      });
+    });
+  });
+
+  startSnapshotScheduler();
 }
 
 module.exports = {initializeSubscriptions, startSnapshotScheduler};

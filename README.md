@@ -20,6 +20,7 @@ This repository is only for the subscription side. For the Nexus AMS main reposi
 2. **Pusher Service**: Uses Pusher to manage and maintain active subscriptions.
 3. **API Forwarding**: When an update/creation/deletion is received, the application sends an HTTP request to Nexus AMS with the updated data.
 4. **Error Handling & Reconnection**: Automatically attempts to reconnect if a subscription is lost.
+5. **Resilient Delivery**: Retries outbound deliveries and snapshot fetches with exponential backoff and actionable logging.
 
 ## Installation
 ### Prerequisites
@@ -46,8 +47,14 @@ PW_API_URL=https://api.politicsandwar.com/subscriptions/v1/subscribe
 PW_API_TOKEN=your_api_token
 PUSHER_SOCKET_HOST=socket.politicsandwar.com
 PW_AUTH_URL=https://api.politicsandwar.com/subscriptions/v1/auth
+PUSHER_APP_KEY=a22734a47847a64386c8
+PUSHER_CLUSTER=abc
 NEXUS_API_URL=https://nexus_ams_url.com/api/v1/subs
 NEXUS_API_TOKEN=your_nexus_api_token
+PW_SNAPSHOT_URL=https://api.politicsandwar.com/subscriptions/v1/snapshot
+ENABLE_SNAPSHOTS=true
+SNAPSHOT_INTERVAL_MINUTES=60
+SNAPSHOT_MODELS=nation
 ```
 
 You can see an example with .env.example
@@ -58,6 +65,17 @@ npm start
 ```
 
 The application will initialize subscriptions and begin forwarding updates to Nexus AMS.
+
+### Optional Configuration
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PUSHER_APP_KEY` | `a22734a47847a64386c8` | Override the default Pusher application key if Politics & War rotates credentials. |
+| `PUSHER_CLUSTER` | `abc` | Set the cluster provided by the Politics & War API. |
+| `PW_SNAPSHOT_URL` | `https://api.politicsandwar.com/subscriptions/v1/snapshot` | Alternate base URL for snapshot requests. |
+| `ENABLE_SNAPSHOTS` | `true` | Disable scheduled snapshot retrievals by setting to `false`. |
+| `SNAPSHOT_INTERVAL_MINUTES` | `60` | Minutes between snapshot refreshes. |
+| `SNAPSHOT_MODELS` | `nation` | Comma-separated list of models to snapshot regularly. |
 
 
 ## Contributing
