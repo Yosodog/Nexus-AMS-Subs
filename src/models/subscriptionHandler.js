@@ -67,6 +67,8 @@ function initializeSubscriptions() {
     alliance: ['create', 'update', 'delete'],
     city: ['create', 'update', 'delete'],
     war: ['create', 'update', 'delete'],
+    warattack: ['create'],
+    account: ['create', 'update', 'delete'],
   };
 
   Object.entries(subscriptionMatrix).forEach(([model, events]) => {
