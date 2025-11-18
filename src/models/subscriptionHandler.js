@@ -3,6 +3,7 @@ const {sendUpdate} = require('../services/apiService');
 const config = require('../config/config');
 const {subscribe} = require('./subscriber');
 const {formatAxiosError} = require('../utils/error');
+const logger = require('../utils/logger');
 
 const SNAPSHOT_MODELS = config.snapshotModels;
 
@@ -16,45 +17,53 @@ async function fetchSnapshot(model) {
             Accept: 'application/json',
           },
           timeout: 30000,
-        },
+      },
     );
 
     const payload = response.data;
     const sizeDescription = Array.isArray(payload)
       ? `${payload.length} records`
       : `${Object.keys(payload || {}).length} fields`;
-    console.log(`Fetched snapshot for ${model} (${sizeDescription}).`);
+    logger.info('Fetched snapshot', {model, size: sizeDescription});
 
     // Send data to Nexus AMS
     await sendUpdate(model, 'snapshot', payload);
   } catch (error) {
     const formattedError = formatAxiosError(error);
-    console.error(`Failed to fetch snapshot for ${model}: ${formattedError}`);
+    logger.error('Failed to fetch snapshot', {
+      model,
+      error: formattedError,
+    });
   }
 }
 
 function startSnapshotScheduler() {
   if (!config.enableSnapshots) {
-    console.log('Snapshots disabled via configuration.');
+    logger.info('Snapshots disabled via configuration.');
     return;
   }
 
   const intervalMs = Math.max(config.snapshotIntervalMinutes, 1) * 60 * 1000;
 
-  console.log('Fetching initial snapshots...');
+  logger.info('Fetching initial snapshots...', {
+    intervalMinutes: config.snapshotIntervalMinutes,
+  });
   SNAPSHOT_MODELS.forEach((model) => {
     fetchSnapshot(model).catch((error) => {
       const formattedError = formatAxiosError(error);
-      console.error(`Initial snapshot failed for ${model}: ${formattedError}`);
+      logger.error('Initial snapshot failed', {model, error: formattedError});
     });
   });
 
   setInterval(() => {
-    console.log('Fetching scheduled snapshots...');
+    logger.info('Fetching scheduled snapshots...');
     SNAPSHOT_MODELS.forEach((model) => {
       fetchSnapshot(model).catch((error) => {
         const formattedError = formatAxiosError(error);
-        console.error(`Scheduled snapshot failed for ${model}: ${formattedError}`);
+        logger.error('Scheduled snapshot failed', {
+          model,
+          error: formattedError,
+        });
       });
     });
   }, intervalMs);
@@ -75,9 +84,11 @@ function initializeSubscriptions() {
     events.forEach((event) => {
       subscribe(model, event).catch((error) => {
         const formattedError = formatAxiosError(error);
-        console.error(
-            `Unexpected error bootstrapping subscription for ${model}:${event}: ${formattedError}`,
-        );
+        logger.error('Unexpected error bootstrapping subscription', {
+          model,
+          event,
+          error: formattedError,
+        });
       });
     });
   });

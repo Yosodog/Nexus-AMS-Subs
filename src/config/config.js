@@ -32,6 +32,7 @@ const config = {
   ),
   enableSnapshots: process.env.ENABLE_SNAPSHOTS !== 'false',
   snapshotIntervalMinutes: Number(process.env.SNAPSHOT_INTERVAL_MINUTES) || 60,
+  logLevel: (process.env.LOG_LEVEL || 'info').toLowerCase(),
   snapshotModels: (() => {
     const models = (process.env.SNAPSHOT_MODELS || 'nation')
         .split(',')

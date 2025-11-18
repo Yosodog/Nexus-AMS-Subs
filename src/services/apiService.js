@@ -1,6 +1,7 @@
 const axios = require('axios');
 const config = require('../config/config');
 const {formatAxiosError} = require('../utils/error');
+const logger = require('../utils/logger');
 
 const MAX_API_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
@@ -24,27 +25,38 @@ async function sendUpdate(model, event, data, attempt = 1) {
     const payloadSize = Array.isArray(data)
       ? `${data.length} records`
       : `${Object.keys(data || {}).length} fields`;
-    console.log(`Successfully sent ${event} for ${model} (${payloadSize}).`);
+    logger.info('Delivered update to Nexus AMS', {
+      model,
+      event,
+      payloadSize,
+    });
   } catch (error) {
     const formattedError = formatAxiosError(error);
-    console.error(
-        `Failed to send ${event} for ${model} on attempt ${attempt}: ${formattedError}`,
-    );
+    logger.error('Failed to send update to Nexus AMS', {
+      model,
+      event,
+      attempt,
+      error: formattedError,
+    });
 
     if (attempt < MAX_API_ATTEMPTS) {
       const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-      console.warn(
-          `Retrying ${model}:${event} delivery in ${delay}ms (attempt ${
-            attempt + 1
-          }/${MAX_API_ATTEMPTS}).`,
-      );
+      logger.warn('Retrying update delivery', {
+        model,
+        event,
+        attempt: attempt + 1,
+        delayMs: delay,
+        maxAttempts: MAX_API_ATTEMPTS,
+      });
       await wait(delay);
       return sendUpdate(model, event, data, attempt + 1);
     }
 
-    console.error(
-        `Abandoning delivery for ${model}:${event} after ${MAX_API_ATTEMPTS} attempts.`,
-    );
+    logger.error('Abandoning delivery after max attempts', {
+      model,
+      event,
+      maxAttempts: MAX_API_ATTEMPTS,
+    });
 
     const terminalError = new Error(
         `Failed to deliver ${model}:${event} after ${MAX_API_ATTEMPTS} attempts`,

@@ -6,6 +6,7 @@ const {
 const {sendUpdate} = require('../services/apiService');
 const config = require('../config/config');
 const {formatAxiosError} = require('../utils/error');
+const logger = require('../utils/logger');
 
 const MAX_SUBSCRIPTION_ATTEMPTS = 5;
 const RETRY_DELAY_MS = 3000;
@@ -25,9 +26,12 @@ async function subscribe(model, event, attempt = 1) {
       throw new Error('Channel name missing from subscription response');
     }
 
-    console.log(
-        `Received channel ${channelName} for ${model}:${event} (attempt ${attempt})`,
-    );
+    logger.info('Received subscription channel', {
+      model,
+      event,
+      channel: channelName,
+      attempt,
+    });
 
     // Set up Pusher subscription to listen for updates
     const channel = subscribeToChannel(channelName);
@@ -37,9 +41,12 @@ async function subscribe(model, event, attempt = 1) {
     const handleDelivery = (payload, source) => {
       sendUpdate(model, event, payload).catch((error) => {
         const formattedError = formatAxiosError(error);
-        console.error(
-            `Unhandled error while forwarding ${model}:${event} (${source}): ${formattedError}`,
-        );
+        logger.error('Unhandled error while forwarding event', {
+          model,
+          event,
+          source,
+          error: formattedError,
+        });
       });
     };
 
@@ -48,12 +55,16 @@ async function subscribe(model, event, attempt = 1) {
     channel.bind(`BULK_${eventName}`, (data) => handleDelivery(data, 'bulk'));
 
     const handleSubscriptionSuccess = () => {
-      console.log(`Successfully subscribed to channel: ${channelName}`);
+      logger.info('Subscribed to channel', {channel: channelName, model, event});
     };
 
     const handleSubscriptionError = (status) => {
-      console.error(
-          `Failed to subscribe to channel: ${channelName}, status: ${status}`);
+      logger.error('Subscription error', {
+        channel: channelName,
+        status,
+        model,
+        event,
+      });
 
       channel.unbind('pusher:subscription_succeeded', handleSubscriptionSuccess);
       channel.unbind('pusher:subscription_error', handleSubscriptionError);
@@ -63,22 +74,33 @@ async function subscribe(model, event, attempt = 1) {
 
       if (attempt < MAX_SUBSCRIPTION_ATTEMPTS) {
         const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-        console.warn(
-            `Retrying ${model}:${event} subscription in ${delay}ms (attempt ${attempt + 1}/${MAX_SUBSCRIPTION_ATTEMPTS})`,
-        );
+        logger.warn('Retrying subscription', {
+          model,
+          event,
+          attempt: attempt + 1,
+          channel: channelName,
+          delayMs: delay,
+          maxAttempts: MAX_SUBSCRIPTION_ATTEMPTS,
+        });
 
         setTimeout(() => {
           subscribe(model, event, attempt + 1).catch((retryError) => {
             const formattedError = formatAxiosError(retryError);
-            console.error(
-                `Retry subscription failed for ${model}:${event}: ${formattedError}`,
-            );
+            logger.error('Retry subscription failed', {
+              model,
+              event,
+              attempt: attempt + 1,
+              error: formattedError,
+            });
           });
         }, delay);
       } else {
-        console.error(
-            `Exceeded maximum retries for ${model}:${event} on channel ${channelName}.`,
-        );
+        logger.error('Exceeded maximum retries during channel subscription', {
+          model,
+          event,
+          channel: channelName,
+          maxAttempts: MAX_SUBSCRIPTION_ATTEMPTS,
+        });
       }
     };
 
@@ -86,15 +108,22 @@ async function subscribe(model, event, attempt = 1) {
     channel.bind('pusher:subscription_error', handleSubscriptionError);
   } catch (error) {
     const formattedError = formatAxiosError(error);
-    console.error(
-        `Failed to subscribe to ${model}:${event}: ${formattedError}`,
-    );
+    logger.error('Failed to subscribe to model event', {
+      model,
+      event,
+      attempt,
+      error: formattedError,
+    });
 
     if (attempt < MAX_SUBSCRIPTION_ATTEMPTS) {
       const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-      console.warn(
-          `Retrying ${model}:${event} subscription in ${delay}ms (attempt ${attempt + 1}/${MAX_SUBSCRIPTION_ATTEMPTS})`,
-      );
+      logger.warn('Retrying subscription', {
+        model,
+        event,
+        attempt: attempt + 1,
+        delayMs: delay,
+        maxAttempts: MAX_SUBSCRIPTION_ATTEMPTS,
+      });
 
       await wait(delay);
       return subscribe(model, event, attempt + 1);
@@ -102,7 +131,11 @@ async function subscribe(model, event, attempt = 1) {
 
     const message =
       `Exceeded maximum retries requesting channel for ${model}:${event}.`;
-    console.error(message);
+    logger.error('Exceeded maximum retries requesting channel', {
+      model,
+      event,
+      maxAttempts: MAX_SUBSCRIPTION_ATTEMPTS,
+    });
     throw new Error(message);
   }
 }

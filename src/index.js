@@ -1,15 +1,22 @@
 const {initializeSubscriptions} = require('./models/subscriptionHandler');
 const {shutdownPusher} = require('./services/pusherService');
+const logger = require('./utils/logger');
 
 let shuttingDown = false;
 
 function registerProcessHandlers() {
   process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled promise rejection detected:', reason);
+    logger.error('Unhandled promise rejection detected', {
+      reason,
+      stack: reason?.stack,
+    });
   });
 
   process.on('uncaughtException', (error) => {
-    console.error('Uncaught exception detected:', error);
+    logger.error('Uncaught exception detected', {
+      error,
+      stack: error?.stack,
+    });
   });
 
   const gracefulShutdown = (signal) => {
@@ -18,7 +25,9 @@ function registerProcessHandlers() {
     }
 
     shuttingDown = true;
-    console.log(`${signal} received. Shutting down gracefully...`);
+    logger.warn('Shutdown signal received. Shutting down gracefully...', {
+      signal,
+    });
     shutdownPusher();
     setTimeout(() => {
       process.exit(0);
@@ -31,7 +40,7 @@ function registerProcessHandlers() {
 }
 
 function startApp() {
-  console.log('Starting subscription service...');
+  logger.info('Starting subscription service...');
   registerProcessHandlers();
   initializeSubscriptions();
 }

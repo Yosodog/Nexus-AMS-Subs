@@ -1,5 +1,6 @@
 const Pusher = require('pusher-js');
 const config = require('../config/config');
+const logger = require('../utils/logger');
 
 let pusherInstance;
 
@@ -20,19 +21,21 @@ const getPusherInstance = () => {
     });
 
     pusherInstance.connection.bind('connected', () => {
-      console.log('Connected to Pusher.');
+      logger.info('Connected to Pusher.');
     });
 
     pusherInstance.connection.bind('disconnected', () => {
-      console.warn('Disconnected from Pusher. Reconnecting in 10 seconds...');
+      logger.warn('Disconnected from Pusher. Reconnecting...', {
+        reconnectDelayMs: 10000,
+      });
       setTimeout(() => {
-        console.log('Attempting to reconnect to Pusher...');
+        logger.info('Attempting to reconnect to Pusher...');
         pusherInstance.connect();
       }, 10000);
     });
 
     pusherInstance.connection.bind('error', (event) => {
-      console.error('Pusher connection error:', event);
+      logger.error('Pusher connection error', {event});
     });
   }
 
