@@ -35,7 +35,8 @@ const config = {
           'https://api.politicsandwar.com/subscriptions/v1/snapshot',
       ),
   ),
-  enableSnapshots: process.env.ENABLE_SNAPSHOTS !== 'false',
+  // Snapshot ingestion is intentionally disabled until it is ready to run.
+  enableSnapshots: false,
   snapshotIntervalMinutes: positiveInteger(
       process.env.SNAPSHOT_INTERVAL_MINUTES,
       60,

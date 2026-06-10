@@ -52,7 +52,7 @@ PUSHER_CLUSTER=abc
 NEXUS_API_URL=https://nexus_ams_url.com/api/v1/subs
 NEXUS_API_TOKEN=your_nexus_api_token
 PW_SNAPSHOT_URL=https://api.politicsandwar.com/subscriptions/v1/snapshot
-ENABLE_SNAPSHOTS=true
+ENABLE_SNAPSHOTS=false
 SNAPSHOT_INTERVAL_MINUTES=60
 SNAPSHOT_MODELS=nation
 LOG_LEVEL=info
@@ -78,7 +78,7 @@ The application will initialize subscriptions and begin forwarding updates to Ne
 | `PUSHER_APP_KEY` | `a22734a47847a64386c8` | Override the default Pusher application key if Politics & War rotates credentials. |
 | `PUSHER_CLUSTER` | `abc` | Set the cluster provided by the Politics & War API. |
 | `PW_SNAPSHOT_URL` | `https://api.politicsandwar.com/subscriptions/v1/snapshot` | Alternate base URL for snapshot requests. |
-| `ENABLE_SNAPSHOTS` | `true` | Disable scheduled snapshot retrievals by setting to `false`. |
+| `ENABLE_SNAPSHOTS` | `false` | Snapshot retrieval is currently disabled. Leave this set to `false`. |
 | `SNAPSHOT_INTERVAL_MINUTES` | `60` | Minutes between snapshot refreshes. |
 | `SNAPSHOT_MODELS` | `nation` | Comma-separated list of models to snapshot regularly. |
 | `LOG_LEVEL` | `info` | Minimum log level to write: `debug`, `info`, `warn`, or `error`. |
