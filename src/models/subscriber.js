@@ -3,7 +3,7 @@ const {
   subscribeToChannel,
   unsubscribeFromChannel,
 } = require('../services/pusherService');
-const {sendUpdate} = require('../services/apiService');
+const {enqueueUpdate} = require('../services/deliveryQueue');
 const config = require('../config/config');
 const {formatAxiosError} = require('../utils/error');
 const logger = require('../utils/logger');
@@ -39,15 +39,20 @@ async function subscribe(model, event, attempt = 1) {
     const eventName = `${model.toUpperCase()}_${event.toUpperCase()}`;
 
     const handleDelivery = (payload, source) => {
-      sendUpdate(model, event, payload).catch((error) => {
-        const formattedError = formatAxiosError(error);
-        logger.error('Unhandled error while forwarding event', {
+      const queued = enqueueUpdate(model, event, payload, {source});
+      if (!queued) {
+        logger.error('Unable to queue incoming subscription event', {
           model,
           event,
           source,
-          error: formattedError,
         });
-      });
+      } else {
+        logger.debug('Queued incoming subscription event', {
+          model,
+          event,
+          source,
+        });
+      }
     };
 
     channel.bind(eventName, (data) => handleDelivery(data, 'single'));

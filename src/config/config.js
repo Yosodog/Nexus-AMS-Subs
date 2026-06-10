@@ -8,12 +8,17 @@ if (!fs.existsSync(dotenvPath)) {
   dotenvPath = path.resolve(__dirname, '../../.env');
 }
 
-require('dotenv').config({path: dotenvPath});
+require('dotenv').config({path: dotenvPath, quiet: true});
 
 const trimTrailingSlash = (value) =>
   typeof value === 'string' ? value.replace(/\/+$/, '') : value;
 
 const withDefault = (value, fallback) => value || fallback;
+
+const positiveInteger = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
 
 const config = {
   pwApiUrl: trimTrailingSlash(process.env.PW_API_URL),
@@ -31,8 +36,24 @@ const config = {
       ),
   ),
   enableSnapshots: process.env.ENABLE_SNAPSHOTS !== 'false',
-  snapshotIntervalMinutes: Number(process.env.SNAPSHOT_INTERVAL_MINUTES) || 60,
+  snapshotIntervalMinutes: positiveInteger(
+      process.env.SNAPSHOT_INTERVAL_MINUTES,
+      60,
+  ),
   logLevel: (process.env.LOG_LEVEL || 'info').toLowerCase(),
+  deliveryQueueConcurrency: positiveInteger(
+      process.env.DELIVERY_QUEUE_CONCURRENCY,
+      3,
+  ),
+  deliveryQueueMaxSize: positiveInteger(
+      process.env.DELIVERY_QUEUE_MAX_SIZE,
+      1000,
+  ),
+  enableDeadLetters: process.env.ENABLE_DEAD_LETTERS !== 'false',
+  deadLetterFile: withDefault(
+      process.env.DEAD_LETTER_FILE,
+      path.resolve(process.cwd(), 'data/dead-letter-events.jsonl'),
+  ),
   snapshotModels: (() => {
     const models = (process.env.SNAPSHOT_MODELS || 'nation')
         .split(',')

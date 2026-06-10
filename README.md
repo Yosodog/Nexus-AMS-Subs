@@ -55,6 +55,11 @@ PW_SNAPSHOT_URL=https://api.politicsandwar.com/subscriptions/v1/snapshot
 ENABLE_SNAPSHOTS=true
 SNAPSHOT_INTERVAL_MINUTES=60
 SNAPSHOT_MODELS=nation
+LOG_LEVEL=info
+DELIVERY_QUEUE_CONCURRENCY=3
+DELIVERY_QUEUE_MAX_SIZE=1000
+ENABLE_DEAD_LETTERS=true
+DEAD_LETTER_FILE=data/dead-letter-events.jsonl
 ```
 
 You can see an example with .env.example
@@ -76,6 +81,11 @@ The application will initialize subscriptions and begin forwarding updates to Ne
 | `ENABLE_SNAPSHOTS` | `true` | Disable scheduled snapshot retrievals by setting to `false`. |
 | `SNAPSHOT_INTERVAL_MINUTES` | `60` | Minutes between snapshot refreshes. |
 | `SNAPSHOT_MODELS` | `nation` | Comma-separated list of models to snapshot regularly. |
+| `LOG_LEVEL` | `info` | Minimum log level to write: `debug`, `info`, `warn`, or `error`. |
+| `DELIVERY_QUEUE_CONCURRENCY` | `3` | Maximum concurrent deliveries sent to Nexus AMS. |
+| `DELIVERY_QUEUE_MAX_SIZE` | `1000` | Maximum queued deliveries waiting behind active sends before new events are dead-lettered. |
+| `ENABLE_DEAD_LETTERS` | `true` | Store failed or overflowed deliveries in a JSONL file for later inspection/replay. |
+| `DEAD_LETTER_FILE` | `data/dead-letter-events.jsonl` | File path used for dead-lettered delivery payloads. |
 
 
 ## Contributing
@@ -95,4 +105,3 @@ This project is open-source and available under the GPL-3.0 License.
 
 ## Support
 If you need assistance or you have questions about this project, please contact Yosodog on Discord. You can join BK's server [here](https://discord.com/invite/VrJFQMBH2R). You can also create an issue here on Github for questions relating to the project.
-

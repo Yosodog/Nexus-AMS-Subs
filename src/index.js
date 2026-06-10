@@ -45,4 +45,11 @@ function startApp() {
   initializeSubscriptions();
 }
 
-startApp();
+if (require.main === module) {
+  startApp();
+}
+
+module.exports = {
+  registerProcessHandlers,
+  startApp,
+};
