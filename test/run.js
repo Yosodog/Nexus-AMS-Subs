@@ -785,6 +785,49 @@ async function testPusherServiceConfiguresSingletonAndShutdown() {
   });
 }
 
+async function testPusherServiceSupportsNamedPusherExport() {
+  const constructed = [];
+
+  class MockPusher {
+    constructor(key, options) {
+      this.key = key;
+      this.options = options;
+      this.connection = {
+        bind: () => {},
+      };
+      this.disconnected = false;
+      constructed.push(this);
+    }
+
+    disconnect() {
+      this.disconnected = true;
+    }
+  }
+
+  await withMockedModules({
+    'pusher-js': {Pusher: MockPusher},
+    '../config/config': createMockConfig({
+      pusherAppKey: 'named-export-key',
+      pusherSocketHost: 'socket.example.test',
+      pwAuthUrl: 'https://pw.example.test/auth',
+      pusherCluster: 'test-cluster',
+      pwApiToken: 'pw-token',
+    }),
+    '../utils/logger': silentLogger,
+  }, async () => {
+    const pusherService = freshProjectRequire('src/services/pusherService.js');
+
+    const instance = pusherService.getPusherInstance();
+
+    assert.strictEqual(constructed.length, 1);
+    assert.strictEqual(instance.key, 'named-export-key');
+    assert.strictEqual(instance.options.wsHost, 'socket.example.test');
+
+    pusherService.shutdownPusher();
+    assert.strictEqual(instance.disconnected, true);
+  });
+}
+
 async function testIndexImportDoesNotStartApp() {
   clearProjectModule('src/index.js');
   clearProjectModule('src/models/subscriptionHandler.js');
@@ -812,6 +855,7 @@ async function run() {
     ['subscriber subscription error unsubscribes and schedules retry', testSubscriberSubscriptionErrorUnsubscribesAndSchedulesRetry],
     ['initialize subscriptions covers all events and leaves snapshots disabled', testInitializeSubscriptionsSubscribesAllEventsAndDoesNotScheduleSnapshots],
     ['pusher service configures singleton and shutdown', testPusherServiceConfiguresSingletonAndShutdown],
+    ['pusher service supports named pusher export', testPusherServiceSupportsNamedPusherExport],
     ['index import does not start app', testIndexImportDoesNotStartApp],
   ];
 

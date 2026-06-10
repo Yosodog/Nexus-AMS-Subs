@@ -1,8 +1,10 @@
-const Pusher = require('pusher-js');
+const pusherModule = require('pusher-js');
 const config = require('../config/config');
 const logger = require('../utils/logger');
 
 let pusherInstance;
+
+const Pusher = pusherModule.Pusher || pusherModule.default || pusherModule;
 
 const getPusherInstance = () => {
   if (!pusherInstance) {
