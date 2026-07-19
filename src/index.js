@@ -1,5 +1,7 @@
 const {initializeSubscriptions} = require('./models/subscriptionHandler');
 const {shutdownPusher} = require('./services/pusherService');
+const {drainDeliveryQueue} = require('./services/deliveryQueue');
+const {shutdownDeliveryTransport} = require('./services/deliveryTransport');
 const logger = require('./utils/logger');
 
 let shuttingDown = false;
@@ -19,7 +21,7 @@ function registerProcessHandlers() {
     });
   });
 
-  const gracefulShutdown = (signal) => {
+  const gracefulShutdown = async (signal) => {
     if (shuttingDown) {
       return;
     }
@@ -29,13 +31,26 @@ function registerProcessHandlers() {
       signal,
     });
     shutdownPusher();
-    setTimeout(() => {
-      process.exit(0);
-    }, 1000);
+
+    const timeout = new Promise((resolve) => setTimeout(resolve, 10000));
+    await Promise.race([drainDeliveryQueue(), timeout]);
+
+    try {
+      await shutdownDeliveryTransport();
+    } catch (error) {
+      logger.error('Failed to close delivery transport during shutdown', {error});
+    }
+
+    process.exit(0);
   };
 
   ['SIGINT', 'SIGTERM'].forEach((signal) => {
-    process.on(signal, () => gracefulShutdown(signal));
+    process.on(signal, () => {
+      gracefulShutdown(signal).catch((error) => {
+        logger.error('Graceful shutdown failed', {error});
+        process.exit(1);
+      });
+    });
   });
 }
 

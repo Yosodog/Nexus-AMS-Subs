@@ -17,7 +17,7 @@ const httpClient = axios.create({
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function sendUpdate(model, event, data, attempt = 1) {
+async function sendUpdate(model, event, data, metadata = {}, attempt = 1) {
   const endpoint = `/${model}/${event}`;
 
   try {
@@ -28,6 +28,7 @@ async function sendUpdate(model, event, data, attempt = 1) {
     logger.info('Delivered update to Nexus AMS', {
       model,
       event,
+      messageId: metadata.messageId,
       payloadSize,
     });
   } catch (error) {
@@ -35,6 +36,7 @@ async function sendUpdate(model, event, data, attempt = 1) {
     logger.error('Failed to send update to Nexus AMS', {
       model,
       event,
+      messageId: metadata.messageId,
       attempt,
       error: formattedError,
     });
@@ -49,12 +51,13 @@ async function sendUpdate(model, event, data, attempt = 1) {
         maxAttempts: MAX_API_ATTEMPTS,
       });
       await wait(delay);
-      return sendUpdate(model, event, data, attempt + 1);
+      return sendUpdate(model, event, data, metadata, attempt + 1);
     }
 
     logger.error('Abandoning delivery after max attempts', {
       model,
       event,
+      messageId: metadata.messageId,
       maxAttempts: MAX_API_ATTEMPTS,
     });
 

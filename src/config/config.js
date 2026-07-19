@@ -20,6 +20,16 @@ const positiveInteger = (value, fallback) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const deliveryDriver = withDefault(process.env.DELIVERY_DRIVER, 'http')
+    .trim()
+    .toLowerCase();
+
+if (!['http', 'redis-stream'].includes(deliveryDriver)) {
+  throw new Error(
+      `Unsupported DELIVERY_DRIVER: ${deliveryDriver}. Expected http or redis-stream.`,
+  );
+}
+
 const config = {
   pwApiUrl: trimTrailingSlash(process.env.PW_API_URL),
   pwApiToken: process.env.PW_API_TOKEN,
@@ -27,6 +37,12 @@ const config = {
   pwAuthUrl: process.env.PW_AUTH_URL,
   nexusApiUrl: trimTrailingSlash(process.env.NEXUS_API_URL),
   nexusApiToken: process.env.NEXUS_API_TOKEN,
+  deliveryDriver,
+  subsRedisUrl: process.env.SUBS_REDIS_URL,
+  subsRedisStream: withDefault(
+      process.env.SUBS_REDIS_STREAM,
+      'nexus:subscriptions:v1',
+  ),
   pusherAppKey: withDefault(process.env.PUSHER_APP_KEY, 'a22734a47847a64386c8'),
   pusherCluster: withDefault(process.env.PUSHER_CLUSTER, 'abc'),
   pwSnapshotUrl: trimTrailingSlash(
@@ -69,9 +85,13 @@ const requiredKeys = [
   'pwApiToken',
   'pusherSocketHost',
   'pwAuthUrl',
-  'nexusApiUrl',
-  'nexusApiToken',
 ];
+
+if (config.deliveryDriver === 'http') {
+  requiredKeys.push('nexusApiUrl', 'nexusApiToken');
+} else {
+  requiredKeys.push('subsRedisUrl', 'subsRedisStream');
+}
 
 const missingKeys = requiredKeys.filter((key) => !config[key]);
 

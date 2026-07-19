@@ -1,7 +1,8 @@
 const fs = require('fs/promises');
 const path = require('path');
+const {randomUUID} = require('crypto');
 const config = require('../config/config');
-const {sendUpdate} = require('./apiService');
+const {deliverUpdate} = require('./deliveryTransport');
 const {formatAxiosError} = require('../utils/error');
 const logger = require('../utils/logger');
 
@@ -24,7 +25,7 @@ async function writeDeadLetter(record, deadLetterFile) {
 }
 
 function createDeliveryQueue(options = {}) {
-  const deliver = options.deliver || sendUpdate;
+  const deliver = options.deliver || deliverUpdate;
   const log = options.logger || logger;
   const queueConfig = options.config || config;
   const maxQueueSize = Math.max(queueConfig.deliveryQueueMaxSize || 1000, 1);
@@ -72,6 +73,7 @@ function createDeliveryQueue(options = {}) {
       model: job.model,
       event: job.event,
       metadata: job.metadata,
+      messageId: job.messageId,
       queuedAt: job.queuedAt,
       recordedAt: new Date().toISOString(),
       error: error ? formatAxiosError(error) : undefined,
@@ -83,12 +85,17 @@ function createDeliveryQueue(options = {}) {
 
   const runJob = async (job) => {
     try {
-      await deliver(job.model, job.event, job.data);
+      await deliver(job.model, job.event, job.data, {
+        ...job.metadata,
+        messageId: job.messageId,
+        receivedAt: job.queuedAt,
+      });
       completed += 1;
       log.debug('Delivery queue job completed', {
         model: job.model,
         event: job.event,
         source: job.metadata.source,
+        messageId: job.messageId,
         queuedAt: job.queuedAt,
       });
     } catch (error) {
@@ -98,6 +105,7 @@ function createDeliveryQueue(options = {}) {
         model: job.model,
         event: job.event,
         source: job.metadata.source,
+        messageId: job.messageId,
         error: formattedError,
       });
 
@@ -136,6 +144,7 @@ function createDeliveryQueue(options = {}) {
       data,
       metadata,
       queuedAt: new Date().toISOString(),
+      messageId: metadata.messageId || randomUUID(),
     };
 
     if (queue.length >= maxQueueSize) {
@@ -144,6 +153,7 @@ function createDeliveryQueue(options = {}) {
         model,
         event,
         source: metadata.source,
+        messageId: job.messageId,
         payloadSize: payloadSizeDescription(data),
         pending: queue.length,
         active,
@@ -168,6 +178,7 @@ function createDeliveryQueue(options = {}) {
       model,
       event,
       source: metadata.source,
+      messageId: job.messageId,
       payloadSize: payloadSizeDescription(data),
       pending: queue.length,
       active,
@@ -200,4 +211,5 @@ module.exports = {
   createDeliveryQueue,
   enqueueUpdate: defaultQueue.enqueue,
   getDeliveryQueueStats: defaultQueue.getStats,
+  drainDeliveryQueue: defaultQueue.drain,
 };

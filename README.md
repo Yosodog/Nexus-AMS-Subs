@@ -24,7 +24,7 @@ This repository is only for the subscription side. For the Nexus AMS main reposi
 
 ## Installation
 ### Prerequisites
-- Node.js (>= 16.x)
+- Node.js (>= 20.x)
 - npm
 
 ### Clone the Repository
@@ -51,6 +51,9 @@ PUSHER_APP_KEY=a22734a47847a64386c8
 PUSHER_CLUSTER=abc
 NEXUS_API_URL=https://nexus_ams_url.com/api/v1/subs
 NEXUS_API_TOKEN=your_nexus_api_token
+DELIVERY_DRIVER=http
+SUBS_REDIS_URL=redis://127.0.0.1:6379/3
+SUBS_REDIS_STREAM=nexus:subscriptions:v1
 PW_SNAPSHOT_URL=https://api.politicsandwar.com/subscriptions/v1/snapshot
 ENABLE_SNAPSHOTS=false
 SNAPSHOT_INTERVAL_MINUTES=60
@@ -86,6 +89,25 @@ The application will initialize subscriptions and begin forwarding updates to Ne
 | `DELIVERY_QUEUE_MAX_SIZE` | `1000` | Maximum queued deliveries waiting behind active sends before new events are dead-lettered. |
 | `ENABLE_DEAD_LETTERS` | `true` | Store failed or overflowed deliveries in a JSONL file for later inspection/replay. |
 | `DEAD_LETTER_FILE` | `data/dead-letter-events.jsonl` | File path used for dead-lettered delivery payloads. |
+| `DELIVERY_DRIVER` | `http` | Active Nexus delivery transport: `http` or `redis-stream`. Exactly one driver is active. |
+| `SUBS_REDIS_URL` | none | Redis connection URL required by `redis-stream`; use `rediss://` for TLS endpoints. |
+| `SUBS_REDIS_STREAM` | `nexus:subscriptions:v1` | Redis stream receiving versioned PW deliveries. |
+
+### Redis Streams Delivery
+
+Set `DELIVERY_DRIVER=redis-stream` to publish each Politics & War single or bulk
+delivery as one Redis Stream entry. Nexus AMS must run `php artisan
+subs:consume-stream` against the same Redis URL and stream. Redis is transport
+only: Nexus acknowledges and removes entries after accepting the work.
+
+Keep `NEXUS_API_URL` and `NEXUS_API_TOKEN` configured as operational backup
+settings. There is no automatic fallback or dual publishing. To return to HTTP,
+stop this service, set `DELIVERY_DRIVER=http`, and restart it after the Redis
+stream has drained or its pending entries have been accounted for.
+
+For separate servers, use a private network or a TLS `rediss://` endpoint with
+restricted Redis credentials. Never expose an unauthenticated Redis port to the
+public internet.
 
 
 ## Contributing

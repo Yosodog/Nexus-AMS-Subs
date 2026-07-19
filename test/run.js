@@ -13,6 +13,9 @@ const CONFIG_ENV_KEYS = [
   'PW_AUTH_URL',
   'NEXUS_API_URL',
   'NEXUS_API_TOKEN',
+  'DELIVERY_DRIVER',
+  'SUBS_REDIS_URL',
+  'SUBS_REDIS_STREAM',
   'PUSHER_APP_KEY',
   'PUSHER_CLUSTER',
   'PW_SNAPSHOT_URL',
@@ -40,6 +43,7 @@ Object.entries(REQUIRED_ENV_DEFAULTS).forEach(([key, value]) => {
 });
 process.env.ENABLE_SNAPSHOTS = 'false';
 process.env.ENABLE_DEAD_LETTERS = 'false';
+process.env.DELIVERY_DRIVER = 'http';
 
 const {createDeliveryQueue} = require('../src/services/deliveryQueue');
 
@@ -57,7 +61,9 @@ const MOCK_SENSITIVE_MODULES = [
   'src/models/subscriptionHandler.js',
   'src/services/apiService.js',
   'src/services/deliveryQueue.js',
+  'src/services/deliveryTransport.js',
   'src/services/pusherService.js',
+  'src/services/redisStreamService.js',
   'src/utils/logger.js',
 ];
 
@@ -180,6 +186,9 @@ function createMockConfig(overrides = {}) {
     pwAuthUrl: 'https://pw.example.test/auth',
     nexusApiUrl: 'https://nexus.example.test/api/v1/subs',
     nexusApiToken: 'nexus-token',
+    deliveryDriver: 'http',
+    subsRedisUrl: 'redis://redis.example.test:6379/3',
+    subsRedisStream: 'nexus:subscriptions:v1',
     pusherAppKey: 'pusher-key',
     pusherCluster: 'abc',
     pwSnapshotUrl: 'https://pw.example.test/snapshot',
@@ -357,6 +366,9 @@ async function testConfigParsesDefaultsAndKeepsSnapshotsDisabled() {
     DELIVERY_QUEUE_MAX_SIZE: '-5',
     ENABLE_DEAD_LETTERS: 'false',
     DEAD_LETTER_FILE: '',
+    DELIVERY_DRIVER: '',
+    SUBS_REDIS_URL: '',
+    SUBS_REDIS_STREAM: '',
   }, async () => {
     const config = freshProjectRequire('src/config/config.js');
 
@@ -370,6 +382,8 @@ async function testConfigParsesDefaultsAndKeepsSnapshotsDisabled() {
     assert.strictEqual(config.logLevel, 'debug');
     assert.strictEqual(config.deliveryQueueConcurrency, 3);
     assert.strictEqual(config.deliveryQueueMaxSize, 1000);
+    assert.strictEqual(config.deliveryDriver, 'http');
+    assert.strictEqual(config.subsRedisStream, 'nexus:subscriptions:v1');
     assert.strictEqual(config.enableDeadLetters, false);
     assert.deepStrictEqual(config.snapshotModels, ['nation', 'alliance', 'war']);
     assert.strictEqual(Object.isFrozen(config), true);
@@ -395,12 +409,247 @@ async function testConfigRejectsMissingRequiredEnv() {
     DELIVERY_QUEUE_MAX_SIZE: '',
     ENABLE_DEAD_LETTERS: '',
     DEAD_LETTER_FILE: '',
+    DELIVERY_DRIVER: 'http',
+    SUBS_REDIS_URL: '',
+    SUBS_REDIS_STREAM: '',
   }, async () => {
     assert.throws(
         () => freshProjectRequire('src/config/config.js'),
         /Missing required environment variables: pwApiUrl, pwApiToken, pusherSocketHost, pwAuthUrl, nexusApiUrl, nexusApiToken/,
     );
   });
+}
+
+async function testConfigRequiresOnlyActiveDeliveryTransport() {
+  await withEnv({
+    ...REQUIRED_ENV_DEFAULTS,
+    DELIVERY_DRIVER: 'redis-stream',
+    NEXUS_API_URL: '',
+    NEXUS_API_TOKEN: '',
+    SUBS_REDIS_URL: 'rediss://redis.example.test:6380/3',
+    SUBS_REDIS_STREAM: 'custom:subscriptions',
+  }, async () => {
+    const config = freshProjectRequire('src/config/config.js');
+
+    assert.strictEqual(config.deliveryDriver, 'redis-stream');
+    assert.strictEqual(config.subsRedisUrl, 'rediss://redis.example.test:6380/3');
+    assert.strictEqual(config.subsRedisStream, 'custom:subscriptions');
+  });
+
+  await withEnv({
+    ...REQUIRED_ENV_DEFAULTS,
+    DELIVERY_DRIVER: 'redis-stream',
+    NEXUS_API_URL: '',
+    NEXUS_API_TOKEN: '',
+    SUBS_REDIS_URL: '',
+    SUBS_REDIS_STREAM: '',
+  }, async () => {
+    assert.throws(
+        () => freshProjectRequire('src/config/config.js'),
+        /Missing required environment variables: subsRedisUrl/,
+    );
+  });
+}
+
+async function testRedisStreamServicePublishesVersionedMessage() {
+  const handlers = {};
+  const published = [];
+  let connected = 0;
+  let closed = 0;
+  const mockClient = {
+    isReady: false,
+    isOpen: false,
+    on(event, handler) {
+      handlers[event] = handler;
+      return this;
+    },
+    async connect() {
+      connected += 1;
+      this.isReady = true;
+      this.isOpen = true;
+    },
+    async xAdd(stream, id, fields) {
+      published.push({stream, id, fields});
+      return '1234-0';
+    },
+    async close() {
+      closed += 1;
+      this.isReady = false;
+      this.isOpen = false;
+    },
+  };
+
+  await withMockedModules({
+    redis: {createClient: () => mockClient},
+    '../config/config': createMockConfig({
+      deliveryDriver: 'redis-stream',
+      subsRedisStream: 'nexus:test:subscriptions',
+    }),
+    '../utils/logger': silentLogger,
+  }, async () => {
+    const {publishUpdate, shutdownRedisStream} =
+      freshProjectRequire('src/services/redisStreamService.js');
+
+    const streamId = await publishUpdate(
+        'nation',
+        'update',
+        [{id: 12}, {id: 34}],
+        {
+          messageId: 'message-stable',
+          source: 'bulk',
+          receivedAt: '2026-07-19T18:30:00.000Z',
+        },
+    );
+
+    assert.strictEqual(streamId, '1234-0');
+    assert.strictEqual(connected, 1);
+    assert.deepStrictEqual(published, [{
+      stream: 'nexus:test:subscriptions',
+      id: '*',
+      fields: {
+        message_id: 'message-stable',
+        schema_version: '1',
+        model: 'nation',
+        event: 'update',
+        source: 'bulk',
+        received_at: '2026-07-19T18:30:00.000Z',
+        payload: JSON.stringify([{id: 12}, {id: 34}]),
+      },
+    }]);
+
+    await shutdownRedisStream();
+    assert.strictEqual(closed, 1);
+  });
+}
+
+async function testRedisStreamServiceRetainsMessageIdAcrossRetries() {
+  const published = [];
+  let connected = 0;
+  let attempts = 0;
+  const mockClient = {
+    isReady: false,
+    isOpen: false,
+    on() {
+      return this;
+    },
+    async connect() {
+      connected += 1;
+      this.isReady = true;
+      this.isOpen = true;
+    },
+    async xAdd(stream, id, fields) {
+      attempts += 1;
+      published.push({stream, id, fields});
+
+      if (attempts === 1) {
+        throw new Error('transient Redis failure');
+      }
+
+      return '1234-1';
+    },
+    async close() {
+      this.isReady = false;
+      this.isOpen = false;
+    },
+  };
+  const originalSetTimeout = global.setTimeout;
+
+  global.setTimeout = (callback) => {
+    callback();
+    return {unref() {}};
+  };
+
+  try {
+    await withMockedModules({
+      redis: {createClient: () => mockClient},
+      '../config/config': createMockConfig({deliveryDriver: 'redis-stream'}),
+      '../utils/logger': silentLogger,
+    }, async () => {
+      const {publishUpdate} =
+        freshProjectRequire('src/services/redisStreamService.js');
+
+      const streamId = await publishUpdate('war', 'update', {id: 77}, {
+        messageId: 'message-retried',
+        source: 'single',
+        receivedAt: '2026-07-19T18:30:00.000Z',
+      });
+
+      assert.strictEqual(streamId, '1234-1');
+    });
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
+
+  assert.strictEqual(connected, 1);
+  assert.strictEqual(published.length, 2);
+  assert.strictEqual(published[0].fields.message_id, 'message-retried');
+  assert.deepStrictEqual(published[1].fields, published[0].fields);
+}
+
+async function testRedisStreamServiceUsesOpenReconnectingClient() {
+  let connected = 0;
+  const mockClient = {
+    isReady: false,
+    isOpen: true,
+    on() {
+      return this;
+    },
+    async connect() {
+      connected += 1;
+    },
+    async xAdd() {
+      return '1234-2';
+    },
+    async close() {
+      this.isOpen = false;
+    },
+  };
+
+  await withMockedModules({
+    redis: {createClient: () => mockClient},
+    '../config/config': createMockConfig({deliveryDriver: 'redis-stream'}),
+    '../utils/logger': silentLogger,
+  }, async () => {
+    const {publishUpdate} =
+      freshProjectRequire('src/services/redisStreamService.js');
+
+    assert.strictEqual(
+        await publishUpdate('city', 'update', {id: 88}, {
+          messageId: 'message-reconnecting',
+          source: 'single',
+          receivedAt: '2026-07-19T18:30:00.000Z',
+        }),
+        '1234-2',
+    );
+  });
+
+  assert.strictEqual(connected, 0);
+}
+
+async function testDeliveryTransportSelectsRedisWithoutHttpFallback() {
+  const calls = [];
+
+  await withMockedModules({
+    '../config/config': createMockConfig({deliveryDriver: 'redis-stream'}),
+    './apiService': {
+      sendUpdate: async () => calls.push('http'),
+    },
+    './redisStreamService': {
+      publishUpdate: async (...args) => calls.push(['redis', ...args]),
+      shutdownRedisStream: async () => calls.push('shutdown'),
+    },
+  }, async () => {
+    const {deliverUpdate, shutdownDeliveryTransport} =
+      freshProjectRequire('src/services/deliveryTransport.js');
+
+    await deliverUpdate('city', 'update', {id: 55}, {messageId: 'message-55'});
+    await shutdownDeliveryTransport();
+  });
+
+  assert.deepStrictEqual(calls, [
+    ['redis', 'city', 'update', {id: 55}, {messageId: 'message-55'}],
+    'shutdown',
+  ]);
 }
 
 async function testFormatAxiosErrorHandlesImportantShapes() {
@@ -848,9 +1097,14 @@ async function run() {
     ['delivery queue writes JSONL dead-letter file', testDeliveryQueueWritesDeadLetterFile],
     ['config parses defaults and keeps snapshots disabled', testConfigParsesDefaultsAndKeepsSnapshotsDisabled],
     ['config rejects missing required env', testConfigRejectsMissingRequiredEnv],
+    ['config requires only active delivery transport', testConfigRequiresOnlyActiveDeliveryTransport],
     ['axios error formatter handles important shapes', testFormatAxiosErrorHandlesImportantShapes],
     ['api service sends update with configured client', testApiServiceSendsUpdateWithConfiguredClient],
     ['api service retries and throws terminal error', testApiServiceRetriesAndThrowsTerminalError],
+    ['redis stream service publishes versioned message', testRedisStreamServicePublishesVersionedMessage],
+    ['redis stream service retains message IDs across retries', testRedisStreamServiceRetainsMessageIdAcrossRetries],
+    ['redis stream service uses an open reconnecting client', testRedisStreamServiceUsesOpenReconnectingClient],
+    ['delivery transport selects redis without HTTP fallback', testDeliveryTransportSelectsRedisWithoutHttpFallback],
     ['subscriber binds pusher events and queues payloads', testSubscriberBindsPusherEventsAndQueuesPayloads],
     ['subscriber subscription error unsubscribes and schedules retry', testSubscriberSubscriptionErrorUnsubscribesAndSchedulesRetry],
     ['initialize subscriptions covers all events and leaves snapshots disabled', testInitializeSubscriptionsSubscribesAllEventsAndDoesNotScheduleSnapshots],
