@@ -2,6 +2,7 @@ const {createClient} = require('redis');
 const config = require('../config/config');
 const {formatAxiosError} = require('../utils/error');
 const logger = require('../utils/logger');
+const {createSignedEnvelope} = require('./subscriptionEnvelope');
 
 const MAX_REDIS_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
@@ -61,39 +62,33 @@ function representativeIds(data) {
       .map((record) => record.id);
 }
 
-async function publishUpdate(model, event, data, metadata = {}, attempt = 1) {
+async function publishEnvelope(fields, metadata, attempt = 1) {
   try {
     const redisClient = await ensureConnected();
-    const streamId = await redisClient.xAdd(config.subsRedisStream, '*', {
-      message_id: metadata.messageId,
-      schema_version: '1',
-      model,
-      event,
-      source: metadata.source || 'single',
-      received_at: metadata.receivedAt,
-      payload: JSON.stringify(data),
-    });
+    const streamId = await redisClient.xAdd(
+        config.subsRedisStream,
+        '*',
+        fields,
+    );
 
     logger.info('Published update to Redis stream', {
       stream: config.subsRedisStream,
       streamId,
-      messageId: metadata.messageId,
-      model,
-      event,
-      source: metadata.source,
-      payloadSize: Array.isArray(data)
-        ? `${data.length} records`
-        : `${Object.keys(data || {}).length} fields`,
-      representativeIds: representativeIds(data),
+      messageId: fields.message_id,
+      model: fields.model,
+      event: fields.event,
+      source: fields.source,
+      payloadSize: metadata.payloadSize,
+      representativeIds: metadata.representativeIds,
     });
 
     return streamId;
   } catch (error) {
     logger.error('Failed to publish update to Redis stream', {
       stream: config.subsRedisStream,
-      messageId: metadata.messageId,
-      model,
-      event,
+      messageId: fields.message_id,
+      model: fields.model,
+      event: fields.event,
       attempt,
       error: formatAxiosError(error),
     });
@@ -101,15 +96,35 @@ async function publishUpdate(model, event, data, metadata = {}, attempt = 1) {
     if (attempt < MAX_REDIS_ATTEMPTS) {
       const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
       await wait(delay);
-      return publishUpdate(model, event, data, metadata, attempt + 1);
+      return publishEnvelope(fields, metadata, attempt + 1);
     }
 
     const terminalError = new Error(
-        `Failed to publish ${model}:${event} after ${MAX_REDIS_ATTEMPTS} attempts`,
+        `Failed to publish ${fields.model}:${fields.event} after ${MAX_REDIS_ATTEMPTS} attempts`,
     );
     terminalError.cause = error;
     throw terminalError;
   }
+}
+
+async function publishUpdate(model, event, data, metadata = {}) {
+  const payload = JSON.stringify(data);
+  const fields = createSignedEnvelope({
+    message_id: metadata.messageId,
+    schema_version: '1',
+    model,
+    event,
+    source: metadata.source || 'single',
+    received_at: metadata.receivedAt,
+    payload,
+  }, config.subsRedisHmacSecret);
+
+  return publishEnvelope(fields, {
+    payloadSize: Array.isArray(data)
+      ? `${data.length} records`
+      : `${Object.keys(data || {}).length} fields`,
+    representativeIds: representativeIds(data),
+  });
 }
 
 async function shutdownRedisStream() {

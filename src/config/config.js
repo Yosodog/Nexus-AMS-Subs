@@ -43,6 +43,7 @@ const config = {
       process.env.SUBS_REDIS_STREAM,
       'nexus:subscriptions:v1',
   ),
+  subsRedisHmacSecret: process.env.SUBS_REDIS_HMAC_SECRET,
   pusherAppKey: withDefault(process.env.PUSHER_APP_KEY, 'a22734a47847a64386c8'),
   pusherCluster: withDefault(process.env.PUSHER_CLUSTER, 'abc'),
   pwSnapshotUrl: trimTrailingSlash(
@@ -90,7 +91,11 @@ const requiredKeys = [
 if (config.deliveryDriver === 'http') {
   requiredKeys.push('nexusApiUrl', 'nexusApiToken');
 } else {
-  requiredKeys.push('subsRedisUrl', 'subsRedisStream');
+  requiredKeys.push(
+      'subsRedisUrl',
+      'subsRedisStream',
+      'subsRedisHmacSecret',
+  );
 }
 
 const missingKeys = requiredKeys.filter((key) => !config[key]);
@@ -98,6 +103,15 @@ const missingKeys = requiredKeys.filter((key) => !config[key]);
 if (missingKeys.length > 0) {
   throw new Error(
       `Missing required environment variables: ${missingKeys.join(', ')}`,
+  );
+}
+
+if (
+  config.deliveryDriver === 'redis-stream' &&
+  Buffer.byteLength(config.subsRedisHmacSecret, 'utf8') < 32
+) {
+  throw new Error(
+      'SUBS_REDIS_HMAC_SECRET must be configured with at least 32 characters.',
   );
 }
 

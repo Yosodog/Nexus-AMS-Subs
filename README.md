@@ -54,6 +54,7 @@ NEXUS_API_TOKEN=your_nexus_api_token
 DELIVERY_DRIVER=http
 SUBS_REDIS_URL=redis://127.0.0.1:6379/3
 SUBS_REDIS_STREAM=nexus:subscriptions:v1
+SUBS_REDIS_HMAC_SECRET=replace_with_at_least_32_random_characters
 PW_SNAPSHOT_URL=https://api.politicsandwar.com/subscriptions/v1/snapshot
 ENABLE_SNAPSHOTS=false
 SNAPSHOT_INTERVAL_MINUTES=60
@@ -92,6 +93,7 @@ The application will initialize subscriptions and begin forwarding updates to Ne
 | `DELIVERY_DRIVER` | `http` | Active Nexus delivery transport: `http` or `redis-stream`. Exactly one driver is active. |
 | `SUBS_REDIS_URL` | none | Redis connection URL required by `redis-stream`; use `rediss://` for TLS endpoints. |
 | `SUBS_REDIS_STREAM` | `nexus:subscriptions:v1` | Redis stream receiving versioned PW deliveries. |
+| `SUBS_REDIS_HMAC_SECRET` | none | Shared secret of at least 32 characters required by `redis-stream`; it must exactly match Nexus AMS. |
 
 ### Redis Streams Delivery
 
@@ -104,6 +106,12 @@ Keep `NEXUS_API_URL` and `NEXUS_API_TOKEN` configured as operational backup
 settings. There is no automatic fallback or dual publishing. To return to HTTP,
 stop this service, set `DELIVERY_DRIVER=http`, and restart it after the Redis
 stream has drained or its pending entries have been accounted for.
+
+Each Redis Stream entry is signed with HMAC-SHA256 over the documented
+versioned envelope fields. Configure the same `SUBS_REDIS_HMAC_SECRET` in this
+service and Nexus AMS before selecting `redis-stream`; either process refuses
+to start the transport when the secret is missing or shorter than 32
+characters.
 
 For separate servers, use a private network or a TLS `rediss://` endpoint with
 restricted Redis credentials. Never expose an unauthenticated Redis port to the

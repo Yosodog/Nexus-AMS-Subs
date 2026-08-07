@@ -16,6 +16,7 @@ const CONFIG_ENV_KEYS = [
   'DELIVERY_DRIVER',
   'SUBS_REDIS_URL',
   'SUBS_REDIS_STREAM',
+  'SUBS_REDIS_HMAC_SECRET',
   'PUSHER_APP_KEY',
   'PUSHER_CLUSTER',
   'PW_SNAPSHOT_URL',
@@ -64,6 +65,7 @@ const MOCK_SENSITIVE_MODULES = [
   'src/services/deliveryTransport.js',
   'src/services/pusherService.js',
   'src/services/redisStreamService.js',
+  'src/services/subscriptionEnvelope.js',
   'src/utils/logger.js',
 ];
 
@@ -189,6 +191,7 @@ function createMockConfig(overrides = {}) {
     deliveryDriver: 'http',
     subsRedisUrl: 'redis://redis.example.test:6379/3',
     subsRedisStream: 'nexus:subscriptions:v1',
+    subsRedisHmacSecret: 's'.repeat(32),
     pusherAppKey: 'pusher-key',
     pusherCluster: 'abc',
     pwSnapshotUrl: 'https://pw.example.test/snapshot',
@@ -369,6 +372,7 @@ async function testConfigParsesDefaultsAndKeepsSnapshotsDisabled() {
     DELIVERY_DRIVER: '',
     SUBS_REDIS_URL: '',
     SUBS_REDIS_STREAM: '',
+    SUBS_REDIS_HMAC_SECRET: '',
   }, async () => {
     const config = freshProjectRequire('src/config/config.js');
 
@@ -412,6 +416,7 @@ async function testConfigRejectsMissingRequiredEnv() {
     DELIVERY_DRIVER: 'http',
     SUBS_REDIS_URL: '',
     SUBS_REDIS_STREAM: '',
+    SUBS_REDIS_HMAC_SECRET: '',
   }, async () => {
     assert.throws(
         () => freshProjectRequire('src/config/config.js'),
@@ -428,12 +433,14 @@ async function testConfigRequiresOnlyActiveDeliveryTransport() {
     NEXUS_API_TOKEN: '',
     SUBS_REDIS_URL: 'rediss://redis.example.test:6380/3',
     SUBS_REDIS_STREAM: 'custom:subscriptions',
+    SUBS_REDIS_HMAC_SECRET: 's'.repeat(32),
   }, async () => {
     const config = freshProjectRequire('src/config/config.js');
 
     assert.strictEqual(config.deliveryDriver, 'redis-stream');
     assert.strictEqual(config.subsRedisUrl, 'rediss://redis.example.test:6380/3');
     assert.strictEqual(config.subsRedisStream, 'custom:subscriptions');
+    assert.strictEqual(config.subsRedisHmacSecret, 's'.repeat(32));
   });
 
   await withEnv({
@@ -443,12 +450,76 @@ async function testConfigRequiresOnlyActiveDeliveryTransport() {
     NEXUS_API_TOKEN: '',
     SUBS_REDIS_URL: '',
     SUBS_REDIS_STREAM: '',
+    SUBS_REDIS_HMAC_SECRET: 's'.repeat(32),
   }, async () => {
     assert.throws(
         () => freshProjectRequire('src/config/config.js'),
         /Missing required environment variables: subsRedisUrl/,
     );
   });
+
+  await withEnv({
+    ...REQUIRED_ENV_DEFAULTS,
+    DELIVERY_DRIVER: 'redis-stream',
+    NEXUS_API_URL: '',
+    NEXUS_API_TOKEN: '',
+    SUBS_REDIS_URL: 'redis://redis.example.test:6379/3',
+    SUBS_REDIS_STREAM: 'nexus:subscriptions:v1',
+    SUBS_REDIS_HMAC_SECRET: '',
+  }, async () => {
+    assert.throws(
+        () => freshProjectRequire('src/config/config.js'),
+        /Missing required environment variables: subsRedisHmacSecret/,
+    );
+  });
+
+  await withEnv({
+    ...REQUIRED_ENV_DEFAULTS,
+    DELIVERY_DRIVER: 'redis-stream',
+    NEXUS_API_URL: '',
+    NEXUS_API_TOKEN: '',
+    SUBS_REDIS_URL: 'redis://redis.example.test:6379/3',
+    SUBS_REDIS_STREAM: 'nexus:subscriptions:v1',
+    SUBS_REDIS_HMAC_SECRET: 'too-short',
+  }, async () => {
+    assert.throws(
+        () => freshProjectRequire('src/config/config.js'),
+        /SUBS_REDIS_HMAC_SECRET must be configured with at least 32 characters/,
+    );
+  });
+}
+
+async function testSubscriptionEnvelopeMatchesNexusCanonicalHmacContract() {
+  const {
+    canonicalPayload,
+    createSignedEnvelope,
+  } = freshProjectRequire('src/services/subscriptionEnvelope.js');
+  const fields = {
+    message_id: 'message-4242',
+    schema_version: '1',
+    model: 'nation',
+    event: 'update',
+    source: 'bulk',
+    received_at: '2026-08-06T14:22:31.123Z',
+    payload: JSON.stringify({id: 4242, name: 'São Paulo'}),
+  };
+
+  assert.strictEqual(canonicalPayload(fields), [
+    'message_id:12:message-4242',
+    'schema_version:1:1',
+    'model:6:nation',
+    'event:6:update',
+    'source:4:bulk',
+    'received_at:24:2026-08-06T14:22:31.123Z',
+    'payload:31:{"id":4242,"name":"São Paulo"}',
+  ].join('\n'));
+  assert.deepStrictEqual(
+      createSignedEnvelope(fields, 's'.repeat(32)),
+      {
+        ...fields,
+        signature: 'b8ae2fec0b0442805ebaea318228dd78628b219e4895860496bc934242010661',
+      },
+  );
 }
 
 async function testRedisStreamServicePublishesVersionedMessage() {
@@ -514,6 +585,7 @@ async function testRedisStreamServicePublishesVersionedMessage() {
         source: 'bulk',
         received_at: '2026-07-19T18:30:00.000Z',
         payload: JSON.stringify([{id: 12}, {id: 34}]),
+        signature: 'ea98430ea15370b569569983175c41b1c47703c73d94bfa59300c9ee7632d912',
       },
     }]);
 
@@ -1098,6 +1170,7 @@ async function run() {
     ['config parses defaults and keeps snapshots disabled', testConfigParsesDefaultsAndKeepsSnapshotsDisabled],
     ['config rejects missing required env', testConfigRejectsMissingRequiredEnv],
     ['config requires only active delivery transport', testConfigRequiresOnlyActiveDeliveryTransport],
+    ['subscription envelope matches Nexus canonical HMAC contract', testSubscriptionEnvelopeMatchesNexusCanonicalHmacContract],
     ['axios error formatter handles important shapes', testFormatAxiosErrorHandlesImportantShapes],
     ['api service sends update with configured client', testApiServiceSendsUpdateWithConfiguredClient],
     ['api service retries and throws terminal error', testApiServiceRetriesAndThrowsTerminalError],
