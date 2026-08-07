@@ -20,6 +20,13 @@ const positiveInteger = (value, fallback) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const safeIdentifier = (value, fallback = 'unknown') => {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/.test(normalized)
+    ? normalized
+    : fallback;
+};
+
 const deliveryDriver = withDefault(process.env.DELIVERY_DRIVER, 'http')
     .trim()
     .toLowerCase();
@@ -72,6 +79,24 @@ const config = {
       process.env.DEAD_LETTER_FILE,
       path.resolve(process.cwd(), 'data/dead-letter-events.jsonl'),
   ),
+  processHealthFile: withDefault(
+      process.env.PROCESS_HEALTH_FILE,
+      path.resolve(process.cwd(), 'data/process-health.json'),
+  ),
+  processHealthIntervalMs: positiveInteger(
+      process.env.PROCESS_HEALTH_INTERVAL_MS,
+      15000,
+  ),
+  processHealthStaleAfterMs: positiveInteger(
+      process.env.PROCESS_HEALTH_STALE_AFTER_MS,
+      45000,
+  ),
+  shutdownTimeoutMs: positiveInteger(
+      process.env.SHUTDOWN_TIMEOUT_MS,
+      60000,
+  ),
+  buildCommit: safeIdentifier(process.env.BUILD_COMMIT),
+  releaseId: safeIdentifier(process.env.NEXUS_RELEASE_ID),
   snapshotModels: (() => {
     const models = (process.env.SNAPSHOT_MODELS || 'nation')
         .split(',')

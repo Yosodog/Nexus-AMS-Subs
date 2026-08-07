@@ -28,6 +28,12 @@ const CONFIG_ENV_KEYS = [
   'DELIVERY_QUEUE_MAX_SIZE',
   'ENABLE_DEAD_LETTERS',
   'DEAD_LETTER_FILE',
+  'PROCESS_HEALTH_FILE',
+  'PROCESS_HEALTH_INTERVAL_MS',
+  'PROCESS_HEALTH_STALE_AFTER_MS',
+  'SHUTDOWN_TIMEOUT_MS',
+  'BUILD_COMMIT',
+  'NEXUS_RELEASE_ID',
 ];
 
 const REQUIRED_ENV_DEFAULTS = {
@@ -60,10 +66,13 @@ const MOCK_SENSITIVE_MODULES = [
   'src/index.js',
   'src/models/subscriber.js',
   'src/models/subscriptionHandler.js',
+  'src/healthcheck.js',
+  'src/processHealthContract.js',
   'src/services/apiService.js',
   'src/services/deliveryQueue.js',
   'src/services/deliveryTransport.js',
   'src/services/pusherService.js',
+  'src/services/processHealth.js',
   'src/services/redisStreamService.js',
   'src/services/subscriptionEnvelope.js',
   'src/utils/logger.js',
@@ -202,6 +211,12 @@ function createMockConfig(overrides = {}) {
     deliveryQueueMaxSize: 1000,
     enableDeadLetters: false,
     deadLetterFile: path.join(PROJECT_ROOT, 'data/dead-letter-events.jsonl'),
+    processHealthFile: path.join(PROJECT_ROOT, 'data/process-health.json'),
+    processHealthIntervalMs: 15000,
+    processHealthStaleAfterMs: 45000,
+    shutdownTimeoutMs: 60000,
+    buildCommit: 'test-commit',
+    releaseId: 'test-release',
     snapshotModels: ['nation'],
     ...overrides,
   };
@@ -373,6 +388,12 @@ async function testConfigParsesDefaultsAndKeepsSnapshotsDisabled() {
     SUBS_REDIS_URL: '',
     SUBS_REDIS_STREAM: '',
     SUBS_REDIS_HMAC_SECRET: '',
+    PROCESS_HEALTH_FILE: '',
+    PROCESS_HEALTH_INTERVAL_MS: '0',
+    PROCESS_HEALTH_STALE_AFTER_MS: 'not-a-number',
+    SHUTDOWN_TIMEOUT_MS: '-5',
+    BUILD_COMMIT: 'bad\ncommit',
+    NEXUS_RELEASE_ID: 'release-2026.08.07',
   }, async () => {
     const config = freshProjectRequire('src/config/config.js');
 
@@ -389,6 +410,15 @@ async function testConfigParsesDefaultsAndKeepsSnapshotsDisabled() {
     assert.strictEqual(config.deliveryDriver, 'http');
     assert.strictEqual(config.subsRedisStream, 'nexus:subscriptions:v1');
     assert.strictEqual(config.enableDeadLetters, false);
+    assert.strictEqual(
+        config.processHealthFile,
+        path.resolve(process.cwd(), 'data/process-health.json'),
+    );
+    assert.strictEqual(config.processHealthIntervalMs, 15000);
+    assert.strictEqual(config.processHealthStaleAfterMs, 45000);
+    assert.strictEqual(config.shutdownTimeoutMs, 60000);
+    assert.strictEqual(config.buildCommit, 'unknown');
+    assert.strictEqual(config.releaseId, 'release-2026.08.07');
     assert.deepStrictEqual(config.snapshotModels, ['nation', 'alliance', 'war']);
     assert.strictEqual(Object.isFrozen(config), true);
   });
@@ -1149,6 +1179,263 @@ async function testPusherServiceSupportsNamedPusherExport() {
   });
 }
 
+async function testProcessHealthPublishesSanitizedLifecycle() {
+  const snapshots = [];
+  let heartbeat;
+  let intervalDelay;
+  let timerCleared = false;
+  let timerUnrefed = false;
+  let timestamp = Date.parse('2026-08-07T05:00:00.000Z');
+  const timer = {
+    unref: () => {
+      timerUnrefed = true;
+    },
+  };
+  const healthConfig = createMockConfig({
+    pwApiToken: 'must-not-appear',
+    nexusApiToken: 'also-must-not-appear',
+    subsRedisUrl: 'rediss://credential@redis.example.test:6380/3',
+  });
+  const {createProcessHealth} = freshProjectRequire(
+      'src/services/processHealth.js',
+  );
+  const health = createProcessHealth({
+    config: healthConfig,
+    now: () => {
+      const value = new Date(timestamp);
+      timestamp += 1000;
+      return value;
+    },
+    getDeliveryQueueStats: () => ({
+      active: 1,
+      accepted: 2,
+      completed: 1,
+      failed: 0,
+      dropped: 0,
+      pending: 0,
+      maxQueueSize: 1000,
+      concurrency: 3,
+    }),
+    writeSnapshot: async (healthFile, snapshot) => {
+      assert.strictEqual(healthFile, healthConfig.processHealthFile);
+      snapshots.push(snapshot);
+    },
+    setIntervalFn: (handler, delay) => {
+      heartbeat = handler;
+      intervalDelay = delay;
+      return timer;
+    },
+    clearIntervalFn: (receivedTimer) => {
+      assert.strictEqual(receivedTimer, timer);
+      timerCleared = true;
+    },
+    logger: silentLogger,
+  });
+
+  await health.start();
+  await health.markReady();
+  await heartbeat();
+  await health.markStopping('SIGTERM');
+  await health.stop({
+    signal: 'SIGTERM',
+    drained: true,
+    transportClosed: true,
+  });
+
+  assert.strictEqual(intervalDelay, 15000);
+  assert.strictEqual(timerUnrefed, true);
+  assert.strictEqual(timerCleared, true);
+  assert.deepStrictEqual(
+      snapshots.map((snapshot) => snapshot.status),
+      ['starting', 'ready', 'ready', 'stopping', 'stopped'],
+  );
+  assert.deepStrictEqual(snapshots.at(-1).shutdown, {
+    signal: 'SIGTERM',
+    drained: true,
+    transport_closed: true,
+  });
+  assert.deepStrictEqual(snapshots[1].build, {
+    version: '1.0.0',
+    commit: 'test-commit',
+    release: 'test-release',
+  });
+  assert.strictEqual(snapshots[1].delivery.driver, 'http');
+  assert.strictEqual(snapshots[1].delivery.queue.accepted, 2);
+
+  const serialized = JSON.stringify(snapshots);
+  assert.doesNotMatch(serialized, /must-not-appear/);
+  assert.doesNotMatch(serialized, /credential@redis/);
+}
+
+async function testProcessHealthFileAndHealthcheckContract() {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexus-subs-health-'));
+  const healthFile = path.join(tempDir, 'nested', 'process-health.json');
+  const heartbeatAt = '2026-08-07T05:00:00.000Z';
+  const snapshot = {
+    schema_version: 1,
+    service: 'nexus-ams-subs',
+    status: 'ready',
+    heartbeat_at: heartbeatAt,
+    stale_after_ms: 45000,
+    build: {
+      version: '1.0.0',
+      commit: 'abc123',
+      release: 'release-1',
+    },
+  };
+  const {writeHealthSnapshot} = freshProjectRequire(
+      'src/services/processHealth.js',
+  );
+  const {
+    runHealthcheck,
+    validateHealthSnapshot,
+  } = freshProjectRequire('src/healthcheck.js');
+
+  await writeHealthSnapshot(healthFile, snapshot);
+
+  const stored = JSON.parse(await fs.readFile(healthFile, 'utf8'));
+  const mode = (await fs.stat(healthFile)).mode & 0o777;
+  assert.deepStrictEqual(stored, snapshot);
+  assert.strictEqual(mode, 0o600);
+  assert.deepStrictEqual(
+      validateHealthSnapshot(snapshot, {
+        now: Date.parse(heartbeatAt) + 10000,
+      }),
+      {healthy: true, reason: 'ready'},
+  );
+  assert.deepStrictEqual(
+      await runHealthcheck({
+        healthFile,
+        now: Date.parse(heartbeatAt) + 10000,
+      }),
+      {healthy: true, reason: 'ready'},
+  );
+  assert.deepStrictEqual(
+      validateHealthSnapshot(snapshot, {
+        now: Date.parse(heartbeatAt) + 60000,
+      }),
+      {healthy: false, reason: 'stale_heartbeat'},
+  );
+  assert.deepStrictEqual(
+      validateHealthSnapshot({...snapshot, status: 'stopping'}, {
+        now: Date.parse(heartbeatAt),
+      }),
+      {healthy: false, reason: 'not_ready'},
+  );
+  assert.deepStrictEqual(
+      validateHealthSnapshot({...snapshot, heartbeat_at: 'invalid'}),
+      {healthy: false, reason: 'invalid_heartbeat'},
+  );
+
+  await fs.rm(tempDir, {recursive: true, force: true});
+}
+
+async function testGracefulShutdownReportsDrainOutcome() {
+  const {
+    performGracefulShutdown,
+    safeErrorCode,
+  } = freshProjectRequire('src/index.js');
+  assert.strictEqual(safeErrorCode({code: 'ECONNRESET'}, 'FALLBACK'), 'ECONNRESET');
+  assert.strictEqual(
+      safeErrorCode({code: 'secret\nvalue'}, 'FALLBACK'),
+      'FALLBACK',
+  );
+  const successfulHealthCalls = [];
+  const successfulOrder = [];
+  const successfulExitCodes = [];
+
+  await performGracefulShutdown('SIGTERM', {
+    health: {
+      markStopping: async (signal) => successfulHealthCalls.push([
+        'stopping',
+        signal,
+      ]),
+      stop: async (result) => successfulHealthCalls.push(['stopped', result]),
+    },
+    logger: silentLogger,
+    shutdownPusher: () => successfulOrder.push('pusher'),
+    drainDeliveryQueue: async () => successfulOrder.push('drain'),
+    shutdownDeliveryTransport: async () => successfulOrder.push('transport'),
+    exit: (code) => successfulExitCodes.push(code),
+    timeoutMs: 100,
+  });
+
+  assert.deepStrictEqual(successfulOrder, ['pusher', 'drain', 'transport']);
+  assert.deepStrictEqual(successfulExitCodes, [0]);
+  assert.deepStrictEqual(successfulHealthCalls, [
+    ['stopping', 'SIGTERM'],
+    ['stopped', {
+      signal: 'SIGTERM',
+      drained: true,
+      transportClosed: true,
+    }],
+  ]);
+
+  const timedOutHealthCalls = [];
+  const timedOutExitCodes = [];
+  await performGracefulShutdown('SIGINT', {
+    health: {
+      markStopping: async () => {},
+      stop: async (result) => timedOutHealthCalls.push(result),
+    },
+    logger: silentLogger,
+    shutdownPusher: () => {},
+    drainDeliveryQueue: () => new Promise(() => {}),
+    shutdownDeliveryTransport: async () => {},
+    exit: (code) => timedOutExitCodes.push(code),
+    timeoutMs: 100,
+    setTimeoutFn: (handler) => {
+      handler();
+      return 'timer';
+    },
+    clearTimeoutFn: () => {},
+  });
+
+  assert.deepStrictEqual(timedOutExitCodes, [1]);
+  assert.deepStrictEqual(timedOutHealthCalls, [{
+    signal: 'SIGINT',
+    drained: false,
+    transportClosed: true,
+  }]);
+
+  const transportFailureLogs = [];
+  const transportFailureHealthCalls = [];
+  const transportFailureExitCodes = [];
+  await performGracefulShutdown('SIGTERM', {
+    health: {
+      markStopping: async () => {},
+      stop: async (result) => transportFailureHealthCalls.push(result),
+    },
+    logger: {
+      ...silentLogger,
+      error: (message, metadata) => {
+        transportFailureLogs.push({message, metadata});
+      },
+    },
+    shutdownPusher: () => {},
+    drainDeliveryQueue: async () => {},
+    shutdownDeliveryTransport: async () => {
+      const error = new Error('rediss://secret@redis.example.test');
+      error.code = 'ECONNRESET';
+      throw error;
+    },
+    exit: (code) => transportFailureExitCodes.push(code),
+    timeoutMs: 100,
+  });
+
+  assert.deepStrictEqual(transportFailureExitCodes, [1]);
+  assert.deepStrictEqual(transportFailureHealthCalls, [{
+    signal: 'SIGTERM',
+    drained: true,
+    transportClosed: false,
+  }]);
+  assert.deepStrictEqual(transportFailureLogs, [{
+    message: 'Failed to close delivery transport during shutdown',
+    metadata: {code: 'ECONNRESET'},
+  }]);
+  assert.doesNotMatch(JSON.stringify(transportFailureLogs), /secret@redis/);
+}
+
 async function testIndexImportDoesNotStartApp() {
   clearProjectModule('src/index.js');
   clearProjectModule('src/models/subscriptionHandler.js');
@@ -1183,6 +1470,9 @@ async function run() {
     ['initialize subscriptions covers all events and leaves snapshots disabled', testInitializeSubscriptionsSubscribesAllEventsAndDoesNotScheduleSnapshots],
     ['pusher service configures singleton and shutdown', testPusherServiceConfiguresSingletonAndShutdown],
     ['pusher service supports named pusher export', testPusherServiceSupportsNamedPusherExport],
+    ['process health publishes sanitized lifecycle', testProcessHealthPublishesSanitizedLifecycle],
+    ['process health file satisfies healthcheck contract', testProcessHealthFileAndHealthcheckContract],
+    ['graceful shutdown reports delivery drain outcome', testGracefulShutdownReportsDrainOutcome],
     ['index import does not start app', testIndexImportDoesNotStartApp],
   ];
 

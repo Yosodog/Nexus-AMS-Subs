@@ -64,6 +64,12 @@ DELIVERY_QUEUE_CONCURRENCY=3
 DELIVERY_QUEUE_MAX_SIZE=1000
 ENABLE_DEAD_LETTERS=true
 DEAD_LETTER_FILE=data/dead-letter-events.jsonl
+PROCESS_HEALTH_FILE=data/process-health.json
+PROCESS_HEALTH_INTERVAL_MS=15000
+PROCESS_HEALTH_STALE_AFTER_MS=45000
+SHUTDOWN_TIMEOUT_MS=60000
+BUILD_COMMIT=unknown
+NEXUS_RELEASE_ID=unknown
 ```
 
 You can see an example with .env.example
@@ -90,6 +96,12 @@ The application will initialize subscriptions and begin forwarding updates to Ne
 | `DELIVERY_QUEUE_MAX_SIZE` | `1000` | Maximum queued deliveries waiting behind active sends before new events are dead-lettered. |
 | `ENABLE_DEAD_LETTERS` | `true` | Store failed or overflowed deliveries in a JSONL file for later inspection/replay. |
 | `DEAD_LETTER_FILE` | `data/dead-letter-events.jsonl` | File path used for dead-lettered delivery payloads. |
+| `PROCESS_HEALTH_FILE` | `data/process-health.json` | Atomic local readiness/heartbeat file written with mode `0600`. |
+| `PROCESS_HEALTH_INTERVAL_MS` | `15000` | Interval between process heartbeats. |
+| `PROCESS_HEALTH_STALE_AFTER_MS` | `45000` | Maximum heartbeat age accepted by `npm run healthcheck`. |
+| `SHUTDOWN_TIMEOUT_MS` | `60000` | Maximum time allowed for the in-memory delivery queue to drain after SIGTERM/SIGINT. |
+| `BUILD_COMMIT` | `unknown` | Immutable source commit or image revision exposed in local build metadata. |
+| `NEXUS_RELEASE_ID` | `unknown` | Server-assigned release identifier exposed in local build metadata. |
 | `DELIVERY_DRIVER` | `http` | Active Nexus delivery transport: `http` or `redis-stream`. Exactly one driver is active. |
 | `SUBS_REDIS_URL` | none | Redis connection URL required by `redis-stream`; use `rediss://` for TLS endpoints. |
 | `SUBS_REDIS_STREAM` | `nexus:subscriptions:v1` | Redis stream receiving versioned PW deliveries. |
@@ -116,6 +128,28 @@ characters.
 For separate servers, use a private network or a TLS `rediss://` endpoint with
 restricted Redis credentials. Never expose an unauthenticated Redis port to the
 public internet.
+
+### Process readiness and shutdown
+
+The service writes an atomic JSON heartbeat to `PROCESS_HEALTH_FILE`. It contains
+only the service state, package/build identifiers, active delivery driver, and
+bounded queue counters; URLs, API credentials, Redis credentials, event
+payloads, and dead letters are excluded. The file is process-local operational
+state and may be placed on a writable runtime mount.
+
+Use the same working directory or `PROCESS_HEALTH_FILE` value when probing it:
+
+```bash
+npm run healthcheck
+```
+
+The command exits nonzero when the file is missing, malformed, stale, from an
+unsupported contract, or reports any state other than `ready`. A SIGTERM or
+SIGINT first disconnects Pusher, then drains accepted deliveries, closes the
+active transport, records the final state, and exits. Configure the process
+manager's stop grace period above `SHUTDOWN_TIMEOUT_MS`; with the default,
+allow at least 70 seconds. A drain timeout or transport-close failure exits
+nonzero so supervision does not report a clean shutdown after possible loss.
 
 
 ## Contributing
