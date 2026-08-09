@@ -4,9 +4,9 @@ const SIGNED_FIELDS = Object.freeze([
   'message_id',
   'schema_version',
   'model',
-  'action',
-  'occurred_at',
-  'key',
+  'event',
+  'source',
+  'received_at',
   'payload',
 ]);
 

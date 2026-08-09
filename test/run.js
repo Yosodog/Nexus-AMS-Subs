@@ -612,9 +612,9 @@ async function testSubscriptionEnvelopeMatchesNexusCanonicalHmacContract() {
     'message_id',
     'schema_version',
     'model',
-    'action',
-    'occurred_at',
-    'key',
+    'event',
+    'source',
+    'received_at',
     'payload',
   ]);
   assert.deepStrictEqual(ENVELOPE_FIELDS, [...SIGNED_FIELDS, 'signature']);
@@ -685,12 +685,12 @@ async function testRedisStreamServicePublishesVersionedMessage() {
     const payload = JSON.parse(expectedEnvelope.payload);
     const streamId = await publishUpdate(
         expectedEnvelope.model,
-        expectedEnvelope.action,
+        expectedEnvelope.event,
         payload,
         {
           messageId: expectedEnvelope.message_id,
-          key: expectedEnvelope.key,
-          occurredAt: expectedEnvelope.occurred_at,
+          source: expectedEnvelope.source,
+          receivedAt: expectedEnvelope.received_at,
         },
     );
 

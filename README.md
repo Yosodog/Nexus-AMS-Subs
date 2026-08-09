@@ -123,7 +123,7 @@ stream has drained or its pending entries have been accounted for.
 
 Each Redis Stream entry is signed with HMAC-SHA256 over the documented
 versioned envelope fields in this order: `message_id`, `schema_version`,
-`model`, `action`, `occurred_at`, `key`, and `payload`; `signature` is the
+`model`, `event`, `source`, `received_at`, and `payload`; `signature` is the
 resulting hex digest. Configure the same `SUBS_REDIS_HMAC_SECRET` in this
 service and Nexus AMS before selecting `redis-stream`; either process refuses
 to start the transport when the secret is missing or shorter than 32
