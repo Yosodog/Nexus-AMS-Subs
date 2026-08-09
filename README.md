@@ -51,6 +51,7 @@ PUSHER_APP_KEY=a22734a47847a64386c8
 PUSHER_CLUSTER=abc
 NEXUS_API_URL=https://nexus_ams_url.com/api/v1/subs
 NEXUS_API_TOKEN=your_nexus_api_token
+NODE_ENV=development
 DELIVERY_DRIVER=http
 SUBS_REDIS_URL=redis://127.0.0.1:6379/3
 SUBS_REDIS_STREAM=nexus:subscriptions:v1
@@ -68,8 +69,8 @@ PROCESS_HEALTH_FILE=data/process-health.json
 PROCESS_HEALTH_INTERVAL_MS=15000
 PROCESS_HEALTH_STALE_AFTER_MS=45000
 SHUTDOWN_TIMEOUT_MS=60000
-BUILD_COMMIT=unknown
-NEXUS_RELEASE_ID=unknown
+BUILD_COMMIT=replace_with_immutable_commit
+NEXUS_RELEASE_ID=replace_with_immutable_release_id
 ```
 
 You can see an example with .env.example
@@ -100,8 +101,9 @@ The application will initialize subscriptions and begin forwarding updates to Ne
 | `PROCESS_HEALTH_INTERVAL_MS` | `15000` | Interval between process heartbeats. |
 | `PROCESS_HEALTH_STALE_AFTER_MS` | `45000` | Maximum heartbeat age accepted by `npm run healthcheck`. |
 | `SHUTDOWN_TIMEOUT_MS` | `60000` | Maximum time allowed for the in-memory delivery queue to drain after SIGTERM/SIGINT. |
-| `BUILD_COMMIT` | `unknown` | Immutable source commit or image revision exposed in local build metadata. |
-| `NEXUS_RELEASE_ID` | `unknown` | Server-assigned release identifier exposed in local build metadata. |
+| `NODE_ENV` | production behavior | Set to `development` or `test` only for an explicit local/test path that permits unpinned provenance. |
+| `BUILD_COMMIT` | none outside development/test | Immutable source commit or image revision. Required and must not be empty or `unknown` outside development/test. |
+| `NEXUS_RELEASE_ID` | none outside development/test | Server-assigned immutable release identifier. Required and must not be empty or `unknown` outside development/test. |
 | `DELIVERY_DRIVER` | `http` | Active Nexus delivery transport: `http` or `redis-stream`. Exactly one driver is active. |
 | `SUBS_REDIS_URL` | none | Redis connection URL required by `redis-stream`; use `rediss://` for TLS endpoints. |
 | `SUBS_REDIS_STREAM` | `nexus:subscriptions:v1` | Redis stream receiving versioned PW deliveries. |
@@ -120,7 +122,9 @@ stop this service, set `DELIVERY_DRIVER=http`, and restart it after the Redis
 stream has drained or its pending entries have been accounted for.
 
 Each Redis Stream entry is signed with HMAC-SHA256 over the documented
-versioned envelope fields. Configure the same `SUBS_REDIS_HMAC_SECRET` in this
+versioned envelope fields in this order: `message_id`, `schema_version`,
+`model`, `action`, `occurred_at`, `key`, and `payload`; `signature` is the
+resulting hex digest. Configure the same `SUBS_REDIS_HMAC_SECRET` in this
 service and Nexus AMS before selecting `redis-stream`; either process refuses
 to start the transport when the secret is missing or shorter than 32
 characters.
@@ -144,9 +148,10 @@ npm run healthcheck
 ```
 
 The command exits nonzero when the file is missing, malformed, stale, from an
-unsupported contract, or reports any state other than `ready`. A SIGTERM or
-SIGINT first disconnects Pusher, then drains accepted deliveries, closes the
-active transport, records the final state, and exits. Configure the process
+unsupported contract, has unpinned production provenance, or reports any state
+other than `ready`. A SIGTERM or SIGINT first disconnects Pusher, then drains
+accepted deliveries, closes the active transport, records the final state, and
+exits. Configure the process
 manager's stop grace period above `SHUTDOWN_TIMEOUT_MS`; with the default,
 allow at least 70 seconds. A drain timeout or transport-close failure exits
 nonzero so supervision does not report a clean shutdown after possible loss.

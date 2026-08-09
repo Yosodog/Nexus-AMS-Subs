@@ -1,5 +1,11 @@
 const path = require('path');
 const fs = require('fs');
+const {
+  assertPinnedProvenance,
+  isDevelopmentEnvironment,
+  normalizeEnvironment,
+  normalizeIdentifier,
+} = require('../provenance');
 
 // Try loading from project root (working directory first)
 let dotenvPath = path.join(process.cwd(), '.env');
@@ -20,12 +26,8 @@ const positiveInteger = (value, fallback) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const safeIdentifier = (value, fallback = 'unknown') => {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  return /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/.test(normalized)
-    ? normalized
-    : fallback;
-};
+const nodeEnvironment = normalizeEnvironment();
+const allowUnpinnedProvenance = isDevelopmentEnvironment(nodeEnvironment);
 
 const deliveryDriver = withDefault(process.env.DELIVERY_DRIVER, 'http')
     .trim()
@@ -95,8 +97,10 @@ const config = {
       process.env.SHUTDOWN_TIMEOUT_MS,
       60000,
   ),
-  buildCommit: safeIdentifier(process.env.BUILD_COMMIT),
-  releaseId: safeIdentifier(process.env.NEXUS_RELEASE_ID),
+  buildCommit: normalizeIdentifier(process.env.BUILD_COMMIT),
+  releaseId: normalizeIdentifier(process.env.NEXUS_RELEASE_ID),
+  nodeEnvironment,
+  allowUnpinnedProvenance,
   snapshotModels: (() => {
     const models = (process.env.SNAPSHOT_MODELS || 'nation')
         .split(',')
@@ -139,5 +143,7 @@ if (
       'SUBS_REDIS_HMAC_SECRET must be configured with at least 32 characters.',
   );
 }
+
+assertPinnedProvenance(config, {allowUnpinned: allowUnpinnedProvenance});
 
 module.exports = Object.freeze(config);

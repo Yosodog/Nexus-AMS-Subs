@@ -1,0 +1,15 @@
+{
+  "fixture_version": "v1",
+  "hmac_key": "fixture-hmac-key-phase2-2026-08-08-0123456789",
+  "canonical_payload": "message_id:20:fixture-message-0001\nschema_version:1:1\nmodel:6:nation\naction:6:update\noccurred_at:24:2026-08-08T12:34:56.789Z\nkey:11:nation:4242\npayload:37:{\"id\":4242,\"name\":\"Synthetic Nation\"}",
+  "envelope": {
+    "message_id": "fixture-message-0001",
+    "schema_version": "1",
+    "model": "nation",
+    "action": "update",
+    "occurred_at": "2026-08-08T12:34:56.789Z",
+    "key": "nation:4242",
+    "payload": "{\"id\":4242,\"name\":\"Synthetic Nation\"}",
+    "signature": "431f7d110176cb45deb2c3fe84fbf31e3b0a6a86da32ddcbdfe7addf325f2467"
+  }
+}

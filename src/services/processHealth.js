@@ -6,6 +6,10 @@ const {
   HEALTH_SCHEMA_VERSION,
   SERVICE_NAME,
 } = require('../processHealthContract');
+const {
+  assertPinnedProvenance,
+  isDevelopmentEnvironment,
+} = require('../provenance');
 const config = require('../config/config');
 const {getDeliveryQueueStats} = require('./deliveryQueue');
 const logger = require('../utils/logger');
@@ -36,6 +40,12 @@ function createProcessHealth(options = {}) {
   const setIntervalFn = options.setIntervalFn || setInterval;
   const clearIntervalFn = options.clearIntervalFn || clearInterval;
   const log = options.logger || logger;
+  const allowUnpinnedProvenance =
+    typeof options.allowUnpinnedProvenance === 'boolean'
+      ? options.allowUnpinnedProvenance
+      : typeof healthConfig.allowUnpinnedProvenance === 'boolean'
+        ? healthConfig.allowUnpinnedProvenance
+        : isDevelopmentEnvironment();
   const startedAt = now().toISOString();
   let heartbeatTimer;
   let state = 'starting';
@@ -72,6 +82,9 @@ function createProcessHealth(options = {}) {
   };
 
   const start = async () => {
+    assertPinnedProvenance(healthConfig, {
+      allowUnpinned: allowUnpinnedProvenance,
+    });
     await publish();
     heartbeatTimer = setIntervalFn(
         () => publish().catch(() => {
@@ -85,6 +98,9 @@ function createProcessHealth(options = {}) {
   };
 
   const markReady = async () => {
+    assertPinnedProvenance(healthConfig, {
+      allowUnpinned: allowUnpinnedProvenance,
+    });
     state = 'ready';
     await publish();
   };

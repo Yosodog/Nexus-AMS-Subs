@@ -4,11 +4,13 @@ const SIGNED_FIELDS = Object.freeze([
   'message_id',
   'schema_version',
   'model',
-  'event',
-  'source',
-  'received_at',
+  'action',
+  'occurred_at',
+  'key',
   'payload',
 ]);
+
+const ENVELOPE_FIELDS = Object.freeze([...SIGNED_FIELDS, 'signature']);
 
 function canonicalPayload(fields) {
   return SIGNED_FIELDS.map((field) => {
@@ -41,13 +43,19 @@ function signEnvelope(fields, secret) {
 }
 
 function createSignedEnvelope(fields, secret) {
+  const signature = signEnvelope(fields, secret);
+  const signedFields = Object.fromEntries(
+      SIGNED_FIELDS.map((field) => [field, fields[field]]),
+  );
+
   return {
-    ...fields,
-    signature: signEnvelope(fields, secret),
+    ...signedFields,
+    signature,
   };
 }
 
 module.exports = {
+  ENVELOPE_FIELDS,
   SIGNED_FIELDS,
   canonicalPayload,
   createSignedEnvelope,

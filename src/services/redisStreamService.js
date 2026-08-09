@@ -76,8 +76,9 @@ async function publishEnvelope(fields, metadata, attempt = 1) {
       streamId,
       messageId: fields.message_id,
       model: fields.model,
-      event: fields.event,
-      source: fields.source,
+      action: fields.action,
+      key: fields.key,
+      occurredAt: fields.occurred_at,
       payloadSize: metadata.payloadSize,
       representativeIds: metadata.representativeIds,
     });
@@ -88,7 +89,7 @@ async function publishEnvelope(fields, metadata, attempt = 1) {
       stream: config.subsRedisStream,
       messageId: fields.message_id,
       model: fields.model,
-      event: fields.event,
+      action: fields.action,
       attempt,
       error: formatAxiosError(error),
     });
@@ -100,22 +101,39 @@ async function publishEnvelope(fields, metadata, attempt = 1) {
     }
 
     const terminalError = new Error(
-        `Failed to publish ${fields.model}:${fields.event} after ${MAX_REDIS_ATTEMPTS} attempts`,
+        `Failed to publish ${fields.model}:${fields.action} after ${MAX_REDIS_ATTEMPTS} attempts`,
     );
     terminalError.cause = error;
     throw terminalError;
   }
 }
 
-async function publishUpdate(model, event, data, metadata = {}) {
+function envelopeKey(metadata = {}) {
+  if (typeof metadata.key === 'string' && metadata.key.length > 0) {
+    return metadata.key;
+  }
+
+  if (typeof metadata.source === 'string' && metadata.source.length > 0) {
+    return metadata.source;
+  }
+
+  return 'single';
+}
+
+function occurredAt(metadata = {}) {
+  return metadata.occurredAt || metadata.receivedAt ||
+    new Date().toISOString();
+}
+
+async function publishUpdate(model, action, data, metadata = {}) {
   const payload = JSON.stringify(data);
   const fields = createSignedEnvelope({
     message_id: metadata.messageId,
     schema_version: '1',
     model,
-    event,
-    source: metadata.source || 'single',
-    received_at: metadata.receivedAt,
+    action,
+    occurred_at: occurredAt(metadata),
+    key: envelopeKey(metadata),
     payload,
   }, config.subsRedisHmacSecret);
 

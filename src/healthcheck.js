@@ -4,6 +4,10 @@ const {
   HEALTH_SCHEMA_VERSION,
   SERVICE_NAME,
 } = require('./processHealthContract');
+const {
+  isDevelopmentEnvironment,
+  isPinnedProvenance,
+} = require('./provenance');
 
 const DEFAULT_STALE_AFTER_MS = 45000;
 const FUTURE_TOLERANCE_MS = 30000;
@@ -15,6 +19,10 @@ function positiveInteger(value, fallback) {
 
 function validateHealthSnapshot(snapshot, options = {}) {
   const now = options.now ?? Date.now();
+  const allowUnpinnedProvenance =
+    typeof options.allowUnpinnedProvenance === 'boolean'
+      ? options.allowUnpinnedProvenance
+      : isDevelopmentEnvironment(options.nodeEnv);
   const staleAfterMs = positiveInteger(
       options.staleAfterMs ?? snapshot?.stale_after_ms,
       DEFAULT_STALE_AFTER_MS,
@@ -43,6 +51,14 @@ function validateHealthSnapshot(snapshot, options = {}) {
     return {healthy: false, reason: 'missing_build_metadata'};
   }
 
+  if (
+    !allowUnpinnedProvenance &&
+    (!isPinnedProvenance(snapshot.build.commit) ||
+      !isPinnedProvenance(snapshot.build.release))
+  ) {
+    return {healthy: false, reason: 'unpinned_build_metadata'};
+  }
+
   const heartbeatAt = Date.parse(snapshot.heartbeat_at);
   if (!Number.isFinite(heartbeatAt)) {
     return {healthy: false, reason: 'invalid_heartbeat'};
@@ -66,11 +82,21 @@ async function runHealthcheck(options = {}) {
   try {
     const contents = await fs.readFile(healthFile, 'utf8');
     const snapshot = JSON.parse(contents);
-    return validateHealthSnapshot(snapshot, {
+    const validationOptions = {
       now: options.now,
       staleAfterMs: options.staleAfterMs ||
         process.env.PROCESS_HEALTH_STALE_AFTER_MS,
-    });
+    };
+
+    if (typeof options.allowUnpinnedProvenance === 'boolean') {
+      validationOptions.allowUnpinnedProvenance =
+        options.allowUnpinnedProvenance;
+    }
+    if (options.nodeEnv !== undefined) {
+      validationOptions.nodeEnv = options.nodeEnv;
+    }
+
+    return validateHealthSnapshot(snapshot, validationOptions);
   } catch {
     return {healthy: false, reason: 'unavailable'};
   }

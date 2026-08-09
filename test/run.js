@@ -5,8 +5,12 @@ const path = require('path');
 const Module = require('module');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+const subscriptionEnvelopeFixture = require(
+    './fixtures/subscription-envelope/v1.json',
+);
 
 const CONFIG_ENV_KEYS = [
+  'NODE_ENV',
   'PW_API_URL',
   'PW_API_TOKEN',
   'PUSHER_SOCKET_HOST',
@@ -35,6 +39,9 @@ const CONFIG_ENV_KEYS = [
   'BUILD_COMMIT',
   'NEXUS_RELEASE_ID',
 ];
+
+// Local tests use the explicit development/test provenance path.
+process.env.NODE_ENV = 'test';
 
 const REQUIRED_ENV_DEFAULTS = {
   PW_API_URL: 'https://example.test/subscribe',
@@ -68,6 +75,7 @@ const MOCK_SENSITIVE_MODULES = [
   'src/models/subscriptionHandler.js',
   'src/healthcheck.js',
   'src/processHealthContract.js',
+  'src/provenance.js',
   'src/services/apiService.js',
   'src/services/deliveryQueue.js',
   'src/services/deliveryTransport.js',
@@ -103,7 +111,11 @@ async function withEnv(overrides, testFn) {
 
   keys.forEach((key) => {
     previous[key] = process.env[key];
-    const value = overrides[key];
+    const value = Object.prototype.hasOwnProperty.call(overrides, key)
+      ? overrides[key]
+      : key === 'NODE_ENV'
+        ? 'test'
+        : undefined;
     if (value === undefined) {
       delete process.env[key];
     } else {
@@ -217,6 +229,7 @@ function createMockConfig(overrides = {}) {
     shutdownTimeoutMs: 60000,
     buildCommit: 'test-commit',
     releaseId: 'test-release',
+    allowUnpinnedProvenance: true,
     snapshotModels: ['nation'],
     ...overrides,
   };
@@ -424,6 +437,68 @@ async function testConfigParsesDefaultsAndKeepsSnapshotsDisabled() {
   });
 }
 
+async function testConfigAcceptsPinnedProductionProvenance() {
+  await withEnv({
+    ...REQUIRED_ENV_DEFAULTS,
+    NODE_ENV: 'production',
+    DELIVERY_DRIVER: 'http',
+    BUILD_COMMIT: '6956bf40295276a861b3b5796c85c5a8f161241b',
+    NEXUS_RELEASE_ID: 'release-2026.08.08.1',
+  }, async () => {
+    const config = freshProjectRequire('src/config/config.js');
+
+    assert.strictEqual(
+        config.buildCommit,
+        '6956bf40295276a861b3b5796c85c5a8f161241b',
+    );
+    assert.strictEqual(config.releaseId, 'release-2026.08.08.1');
+    assert.strictEqual(config.allowUnpinnedProvenance, false);
+  });
+}
+
+async function testConfigAllowsUnpinnedProvenanceOnlyInDevelopment() {
+  await withEnv({
+    ...REQUIRED_ENV_DEFAULTS,
+    NODE_ENV: 'development',
+    DELIVERY_DRIVER: 'http',
+    BUILD_COMMIT: '',
+    NEXUS_RELEASE_ID: 'unknown',
+  }, async () => {
+    const config = freshProjectRequire('src/config/config.js');
+
+    assert.strictEqual(config.buildCommit, 'unknown');
+    assert.strictEqual(config.releaseId, 'unknown');
+    assert.strictEqual(config.allowUnpinnedProvenance, true);
+  });
+}
+
+async function testConfigRejectsUnpinnedProductionProvenance() {
+  for (const [key, value] of [
+    ['BUILD_COMMIT', undefined],
+    ['BUILD_COMMIT', ''],
+    ['BUILD_COMMIT', 'unknown'],
+    ['BUILD_COMMIT', 'bad\ncommit'],
+    ['NEXUS_RELEASE_ID', undefined],
+    ['NEXUS_RELEASE_ID', ''],
+    ['NEXUS_RELEASE_ID', 'unknown'],
+    ['NEXUS_RELEASE_ID', 'bad\nrelease'],
+  ]) {
+    await withEnv({
+      ...REQUIRED_ENV_DEFAULTS,
+      NODE_ENV: 'production',
+      DELIVERY_DRIVER: 'http',
+      BUILD_COMMIT: '6956bf40295276a861b3b5796c85c5a8f161241b',
+      NEXUS_RELEASE_ID: 'release-2026.08.08.1',
+      [key]: value,
+    }, async () => {
+      assert.throws(
+          () => freshProjectRequire('src/config/config.js'),
+          new RegExp(`Pinned immutable provenance.*${key}`),
+      );
+    });
+  }
+}
+
 async function testConfigRejectsMissingRequiredEnv() {
   await withEnv({
     PW_API_URL: '',
@@ -523,32 +598,46 @@ async function testSubscriptionEnvelopeMatchesNexusCanonicalHmacContract() {
   const {
     canonicalPayload,
     createSignedEnvelope,
+    ENVELOPE_FIELDS,
+    SIGNED_FIELDS,
   } = freshProjectRequire('src/services/subscriptionEnvelope.js');
-  const fields = {
-    message_id: 'message-4242',
-    schema_version: '1',
-    model: 'nation',
-    event: 'update',
-    source: 'bulk',
-    received_at: '2026-08-06T14:22:31.123Z',
-    payload: JSON.stringify({id: 4242, name: 'São Paulo'}),
-  };
+  const {envelope, hmac_key: hmacKey, canonical_payload: canonical} =
+    subscriptionEnvelopeFixture;
+  const fields = Object.fromEntries(
+      SIGNED_FIELDS.map((field) => [field, envelope[field]]),
+  );
 
-  assert.strictEqual(canonicalPayload(fields), [
-    'message_id:12:message-4242',
-    'schema_version:1:1',
-    'model:6:nation',
-    'event:6:update',
-    'source:4:bulk',
-    'received_at:24:2026-08-06T14:22:31.123Z',
-    'payload:31:{"id":4242,"name":"São Paulo"}',
-  ].join('\n'));
-  assert.deepStrictEqual(
-      createSignedEnvelope(fields, 's'.repeat(32)),
-      {
-        ...fields,
-        signature: 'b8ae2fec0b0442805ebaea318228dd78628b219e4895860496bc934242010661',
-      },
+  assert.ok(hmacKey.length >= 32);
+  assert.deepStrictEqual(SIGNED_FIELDS, [
+    'message_id',
+    'schema_version',
+    'model',
+    'action',
+    'occurred_at',
+    'key',
+    'payload',
+  ]);
+  assert.deepStrictEqual(ENVELOPE_FIELDS, [...SIGNED_FIELDS, 'signature']);
+  assert.strictEqual(canonicalPayload(fields), canonical);
+  assert.deepStrictEqual(createSignedEnvelope(fields, hmacKey), envelope);
+}
+
+async function testSubscriptionEnvelopeRejectsSignatureMismatch() {
+  const {
+    createSignedEnvelope,
+    signEnvelope,
+  } = freshProjectRequire('src/services/subscriptionEnvelope.js');
+  const {envelope, hmac_key: hmacKey} = subscriptionEnvelopeFixture;
+  const tamperedFields = {
+    ...envelope,
+    payload: JSON.stringify({id: 4242, name: 'Tampered Nation'}),
+  };
+  delete tamperedFields.signature;
+
+  assert.notStrictEqual(signEnvelope(tamperedFields, hmacKey), envelope.signature);
+  assert.notStrictEqual(
+      createSignedEnvelope(tamperedFields, hmacKey).signature,
+      envelope.signature,
   );
 }
 
@@ -585,20 +674,23 @@ async function testRedisStreamServicePublishesVersionedMessage() {
     '../config/config': createMockConfig({
       deliveryDriver: 'redis-stream',
       subsRedisStream: 'nexus:test:subscriptions',
+      subsRedisHmacSecret: subscriptionEnvelopeFixture.hmac_key,
     }),
     '../utils/logger': silentLogger,
   }, async () => {
     const {publishUpdate, shutdownRedisStream} =
       freshProjectRequire('src/services/redisStreamService.js');
 
+    const expectedEnvelope = subscriptionEnvelopeFixture.envelope;
+    const payload = JSON.parse(expectedEnvelope.payload);
     const streamId = await publishUpdate(
-        'nation',
-        'update',
-        [{id: 12}, {id: 34}],
+        expectedEnvelope.model,
+        expectedEnvelope.action,
+        payload,
         {
-          messageId: 'message-stable',
-          source: 'bulk',
-          receivedAt: '2026-07-19T18:30:00.000Z',
+          messageId: expectedEnvelope.message_id,
+          key: expectedEnvelope.key,
+          occurredAt: expectedEnvelope.occurred_at,
         },
     );
 
@@ -607,17 +699,12 @@ async function testRedisStreamServicePublishesVersionedMessage() {
     assert.deepStrictEqual(published, [{
       stream: 'nexus:test:subscriptions',
       id: '*',
-      fields: {
-        message_id: 'message-stable',
-        schema_version: '1',
-        model: 'nation',
-        event: 'update',
-        source: 'bulk',
-        received_at: '2026-07-19T18:30:00.000Z',
-        payload: JSON.stringify([{id: 12}, {id: 34}]),
-        signature: 'ea98430ea15370b569569983175c41b1c47703c73d94bfa59300c9ee7632d912',
-      },
+      fields: expectedEnvelope,
     }]);
+    assert.deepStrictEqual(
+        JSON.parse(published[0].fields.payload),
+        payload,
+    );
 
     await shutdownRedisStream();
     assert.strictEqual(closed, 1);
@@ -1267,6 +1354,34 @@ async function testProcessHealthPublishesSanitizedLifecycle() {
   assert.doesNotMatch(serialized, /credential@redis/);
 }
 
+async function testProcessHealthRejectsUnpinnedProvenanceBeforeReadiness() {
+  const {createProcessHealth} = freshProjectRequire(
+      'src/services/processHealth.js',
+  );
+  const invalidConfig = createMockConfig({
+    buildCommit: 'unknown',
+    releaseId: '',
+    allowUnpinnedProvenance: false,
+  });
+
+  const createHealth = () => createProcessHealth({
+    config: invalidConfig,
+    writeSnapshot: async () => {
+      throw new Error('unreachable');
+    },
+    logger: silentLogger,
+  });
+
+  await assert.rejects(
+      () => createHealth().start(),
+      /Pinned immutable provenance.*BUILD_COMMIT.*NEXUS_RELEASE_ID/,
+  );
+  await assert.rejects(
+      () => createHealth().markReady(),
+      /Pinned immutable provenance.*BUILD_COMMIT.*NEXUS_RELEASE_ID/,
+  );
+}
+
 async function testProcessHealthFileAndHealthcheckContract() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexus-subs-health-'));
   const healthFile = path.join(tempDir, 'nested', 'process-health.json');
@@ -1326,6 +1441,41 @@ async function testProcessHealthFileAndHealthcheckContract() {
       validateHealthSnapshot({...snapshot, heartbeat_at: 'invalid'}),
       {healthy: false, reason: 'invalid_heartbeat'},
   );
+  assert.deepStrictEqual(
+      validateHealthSnapshot({
+        ...snapshot,
+        build: {...snapshot.build, commit: 'unknown'},
+      }, {
+        now: Date.parse(heartbeatAt) + 10000,
+        allowUnpinnedProvenance: false,
+      }),
+      {healthy: false, reason: 'unpinned_build_metadata'},
+  );
+  assert.deepStrictEqual(
+      validateHealthSnapshot({
+        ...snapshot,
+        build: {...snapshot.build, release: ''},
+      }, {
+        now: Date.parse(heartbeatAt) + 10000,
+        allowUnpinnedProvenance: false,
+      }),
+      {healthy: false, reason: 'unpinned_build_metadata'},
+  );
+  await writeHealthSnapshot(healthFile, {
+    ...snapshot,
+    build: {...snapshot.build, commit: 'unknown'},
+  });
+  await withEnv({NODE_ENV: 'production'}, async () => {
+    const {runHealthcheck} = freshProjectRequire('src/healthcheck.js');
+
+    assert.deepStrictEqual(
+        await runHealthcheck({
+          healthFile,
+          now: Date.parse(heartbeatAt) + 10000,
+        }),
+        {healthy: false, reason: 'unpinned_build_metadata'},
+    );
+  });
 
   await fs.rm(tempDir, {recursive: true, force: true});
 }
@@ -1455,9 +1605,13 @@ async function run() {
     ['delivery queue dead-letters failed sends', testFailedDeliveryRecordsDeadLetter],
     ['delivery queue writes JSONL dead-letter file', testDeliveryQueueWritesDeadLetterFile],
     ['config parses defaults and keeps snapshots disabled', testConfigParsesDefaultsAndKeepsSnapshotsDisabled],
+    ['config accepts pinned production provenance', testConfigAcceptsPinnedProductionProvenance],
+    ['config allows unpinned provenance only in development', testConfigAllowsUnpinnedProvenanceOnlyInDevelopment],
+    ['config rejects unpinned production provenance', testConfigRejectsUnpinnedProductionProvenance],
     ['config rejects missing required env', testConfigRejectsMissingRequiredEnv],
     ['config requires only active delivery transport', testConfigRequiresOnlyActiveDeliveryTransport],
     ['subscription envelope matches Nexus canonical HMAC contract', testSubscriptionEnvelopeMatchesNexusCanonicalHmacContract],
+    ['subscription envelope rejects signature mismatch', testSubscriptionEnvelopeRejectsSignatureMismatch],
     ['axios error formatter handles important shapes', testFormatAxiosErrorHandlesImportantShapes],
     ['api service sends update with configured client', testApiServiceSendsUpdateWithConfiguredClient],
     ['api service retries and throws terminal error', testApiServiceRetriesAndThrowsTerminalError],
@@ -1471,6 +1625,7 @@ async function run() {
     ['pusher service configures singleton and shutdown', testPusherServiceConfiguresSingletonAndShutdown],
     ['pusher service supports named pusher export', testPusherServiceSupportsNamedPusherExport],
     ['process health publishes sanitized lifecycle', testProcessHealthPublishesSanitizedLifecycle],
+    ['process health rejects unpinned provenance before readiness', testProcessHealthRejectsUnpinnedProvenanceBeforeReadiness],
     ['process health file satisfies healthcheck contract', testProcessHealthFileAndHealthcheckContract],
     ['graceful shutdown reports delivery drain outcome', testGracefulShutdownReportsDrainOutcome],
     ['index import does not start app', testIndexImportDoesNotStartApp],
