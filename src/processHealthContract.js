@@ -1,7 +1,9 @@
 const HEALTH_SCHEMA_VERSION = 1;
 const SERVICE_NAME = 'nexus-ams-subs';
+const DELIVERY_FAILURE_THRESHOLD = 3;
 
 module.exports = {
+  DELIVERY_FAILURE_THRESHOLD,
   HEALTH_SCHEMA_VERSION,
   SERVICE_NAME,
 };

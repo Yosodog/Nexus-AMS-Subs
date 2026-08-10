@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const {randomUUID} = require('crypto');
+const {DELIVERY_FAILURE_THRESHOLD} = require('../processHealthContract');
 const config = require('../config/config');
 const {deliverUpdate} = require('./deliveryTransport');
 const {formatAxiosError} = require('../utils/error');
@@ -41,12 +42,14 @@ function createDeliveryQueue(options = {}) {
   let completed = 0;
   let failed = 0;
   let dropped = 0;
+  let consecutiveFailures = 0;
 
   const getStats = () => ({
     active,
     accepted,
     completed,
     failed,
+    consecutiveFailures,
     dropped,
     pending: queue.length,
     maxQueueSize,
@@ -63,7 +66,7 @@ function createDeliveryQueue(options = {}) {
     }
   };
 
-  const recordDeadLetter = async (job, reason, error) => {
+  const recordDeadLetter = async (job, reason, error, classification = reason) => {
     if (!enableDeadLetters || !deadLetterFile) {
       return;
     }
@@ -76,6 +79,7 @@ function createDeliveryQueue(options = {}) {
       messageId: job.messageId,
       queuedAt: job.queuedAt,
       recordedAt: new Date().toISOString(),
+      classification,
       error: error ? formatAxiosError(error) : undefined,
       payload: job.data,
     };
@@ -91,6 +95,7 @@ function createDeliveryQueue(options = {}) {
         receivedAt: job.queuedAt,
       });
       completed += 1;
+      consecutiveFailures = 0;
       log.debug('Delivery queue job completed', {
         model: job.model,
         event: job.event,
@@ -100,17 +105,26 @@ function createDeliveryQueue(options = {}) {
       });
     } catch (error) {
       failed += 1;
+      consecutiveFailures = Math.min(
+          consecutiveFailures + 1,
+          DELIVERY_FAILURE_THRESHOLD,
+      );
+      const classification = error?.classification || 'delivery_failed';
+      const reason = classification === 'terminal_4xx'
+        ? 'terminal_4xx'
+        : 'delivery_failed';
       const formattedError = formatAxiosError(error);
-      log.error('Delivery queue job failed after retries', {
+      log.error('Delivery queue job failed', {
         model: job.model,
         event: job.event,
         source: job.metadata.source,
         messageId: job.messageId,
+        classification,
         error: formattedError,
       });
 
       try {
-        await recordDeadLetter(job, 'delivery_failed', error);
+        await recordDeadLetter(job, reason, error, classification);
       } catch (deadLetterError) {
         log.error('Failed to record delivery dead letter', {
           model: job.model,

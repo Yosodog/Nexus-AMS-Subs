@@ -6,6 +6,36 @@ const logger = require('../utils/logger');
 const MAX_API_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
 
+function responseStatus(error) {
+  const status = Number(error?.response?.status);
+  return Number.isInteger(status) ? status : undefined;
+}
+
+function isTerminalHttp4xx(error) {
+  const status = responseStatus(error);
+  return status !== undefined &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429;
+}
+
+function createTerminalHttpError(model, event, error) {
+  const status = responseStatus(error);
+  return Object.assign(
+      new Error(
+          `Delivery rejected by Nexus AMS with HTTP ${status} for ${model}:${event}`,
+      ),
+      {
+        code: 'DELIVERY_TERMINAL_4XX',
+        classification: 'terminal_4xx',
+        retryable: false,
+        status,
+        cause: error,
+      },
+  );
+}
+
 const httpClient = axios.create({
   baseURL: config.nexusApiUrl,
   timeout: 10000,
@@ -38,8 +68,13 @@ async function sendUpdate(model, event, data, metadata = {}, attempt = 1) {
       event,
       messageId: metadata.messageId,
       attempt,
+      classification: isTerminalHttp4xx(error) ? 'terminal_4xx' : 'retryable',
       error: formattedError,
     });
+
+    if (isTerminalHttp4xx(error)) {
+      throw createTerminalHttpError(model, event, error);
+    }
 
     if (attempt < MAX_API_ATTEMPTS) {
       const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
@@ -61,10 +96,17 @@ async function sendUpdate(model, event, data, metadata = {}, attempt = 1) {
       maxAttempts: MAX_API_ATTEMPTS,
     });
 
-    const terminalError = new Error(
-        `Failed to deliver ${model}:${event} after ${MAX_API_ATTEMPTS} attempts`,
+    const terminalError = Object.assign(
+        new Error(
+            `Failed to deliver ${model}:${event} after ${MAX_API_ATTEMPTS} attempts`,
+        ),
+        {
+          code: 'DELIVERY_RETRY_EXHAUSTED',
+          classification: 'retry_exhausted',
+          retryable: false,
+          cause: error,
+        },
     );
-    terminalError.cause = error;
     throw terminalError;
   }
 }

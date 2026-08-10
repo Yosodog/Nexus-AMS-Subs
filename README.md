@@ -141,6 +141,12 @@ bounded queue counters; URLs, API credentials, Redis credentials, event
 payloads, and dead letters are excluded. The file is process-local operational
 state and may be placed on a writable runtime mount.
 
+The queue health data includes a capped `consecutiveFailures` signal. After
+three consecutive delivery jobs fail, the snapshot reports `degraded` and the
+health check returns `delivery_failures`; a successful delivery resets the
+signal and allows readiness to recover. A single historical failure does not
+permanently poison health.
+
 Use the same working directory or `PROCESS_HEALTH_FILE` value when probing it:
 
 ```bash

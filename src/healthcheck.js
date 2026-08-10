@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const {
+  DELIVERY_FAILURE_THRESHOLD,
   HEALTH_SCHEMA_VERSION,
   SERVICE_NAME,
 } = require('./processHealthContract');
@@ -15,6 +16,14 @@ const FUTURE_TOLERANCE_MS = 30000;
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function hasSustainedDeliveryFailures(snapshot) {
+  const consecutiveFailures = Number(
+      snapshot?.delivery?.queue?.consecutiveFailures,
+  );
+  return Number.isInteger(consecutiveFailures) &&
+    consecutiveFailures >= DELIVERY_FAILURE_THRESHOLD;
 }
 
 function validateHealthSnapshot(snapshot, options = {}) {
@@ -39,7 +48,7 @@ function validateHealthSnapshot(snapshot, options = {}) {
     return {healthy: false, reason: 'unsupported_contract'};
   }
 
-  if (snapshot.status !== 'ready') {
+  if (snapshot.status !== 'ready' && snapshot.status !== 'degraded') {
     return {healthy: false, reason: 'not_ready'};
   }
 
@@ -70,6 +79,14 @@ function validateHealthSnapshot(snapshot, options = {}) {
 
   if (now - heartbeatAt > staleAfterMs) {
     return {healthy: false, reason: 'stale_heartbeat'};
+  }
+
+  if (hasSustainedDeliveryFailures(snapshot)) {
+    return {healthy: false, reason: 'delivery_failures'};
+  }
+
+  if (snapshot.status !== 'ready') {
+    return {healthy: false, reason: 'not_ready'};
   }
 
   return {healthy: true, reason: 'ready'};

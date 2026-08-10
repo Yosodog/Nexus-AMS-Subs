@@ -277,6 +277,7 @@ async function testQueueLimitsConcurrency() {
     accepted: 4,
     completed: 4,
     failed: 0,
+    consecutiveFailures: 0,
     dropped: 0,
     pending: 0,
     maxQueueSize: 10,
@@ -346,6 +347,42 @@ async function testFailedDeliveryRecordsDeadLetter() {
   assert.strictEqual(deadLetters.length, 1);
   assert.strictEqual(deadLetters[0].reason, 'delivery_failed');
   assert.match(deadLetters[0].error, /Nexus unavailable/);
+}
+
+async function testTerminalDeliveryDeadLettersOnceWithClassification() {
+  const deadLetters = [];
+  let deliveryAttempts = 0;
+  const terminalError = Object.assign(new Error('HTTP 422 validation failed'), {
+    code: 'DELIVERY_TERMINAL_4XX',
+    classification: 'terminal_4xx',
+    retryable: false,
+    status: 422,
+  });
+
+  const queue = createDeliveryQueue({
+    config: {
+      deliveryQueueConcurrency: 1,
+      deliveryQueueMaxSize: 5,
+      enableDeadLetters: true,
+      deadLetterFile: 'unused.jsonl',
+    },
+    logger: silentLogger,
+    writeDeadLetter: async (record) => {
+      deadLetters.push(record);
+    },
+    deliver: async () => {
+      deliveryAttempts += 1;
+      throw terminalError;
+    },
+  });
+
+  assert.strictEqual(queue.enqueue('nation', 'update', {id: 10}), true);
+  await queue.drain();
+
+  assert.strictEqual(deliveryAttempts, 1);
+  assert.strictEqual(deadLetters.length, 1);
+  assert.strictEqual(deadLetters[0].reason, 'terminal_4xx');
+  assert.strictEqual(deadLetters[0].classification, 'terminal_4xx');
 }
 
 async function testDeliveryQueueWritesDeadLetterFile() {
@@ -845,7 +882,7 @@ async function testFormatAxiosErrorHandlesImportantShapes() {
   const {formatAxiosError} = freshProjectRequire('src/utils/error.js');
 
   assert.strictEqual(formatAxiosError(), 'Unknown error');
-  assert.match(
+  assert.strictEqual(
       formatAxiosError({
         response: {
           status: 500,
@@ -854,7 +891,17 @@ async function testFormatAxiosErrorHandlesImportantShapes() {
           headers: {'content-type': 'text/html'},
         },
       }),
-      /HTTP 500 Server Error - HTML response \(title="Bad Gateway"\) length=\d+/,
+      'HTTP 500 Server Error - response body omitted',
+  );
+  assert.doesNotMatch(
+      formatAxiosError({
+        response: {
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          data: {token: 'response-token', payload: [{id: 1}]},
+        },
+      }),
+      /response-token|payload/,
   );
   assert.strictEqual(
       formatAxiosError({request: {}}),
@@ -936,6 +983,111 @@ async function testApiServiceRetriesAndThrowsTerminalError() {
     assert.match(thrownError.message, /Failed to deliver nation:delete after 3 attempts/);
     assert.strictEqual(thrownError.cause, failure);
   });
+}
+
+async function testApiServiceDoesNotRetryTerminalHttp4xx() {
+  const responseFailure = {
+    response: {
+      status: 400,
+      statusText: 'Bad Request',
+      data: {
+        token: 'response-token',
+        records: [{id: 123, secret: 'response-secret'}],
+      },
+    },
+  };
+  let attempts = 0;
+  let thrownError;
+  const logs = [];
+  const logger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: (message, metadata) => logs.push({message, metadata}),
+  };
+  const axiosMock = {
+    create: () => ({
+      post: async () => {
+        attempts += 1;
+        throw responseFailure;
+      },
+    }),
+  };
+
+  await withFakeTimers({runTimeouts: true}, async ({timeouts}) => {
+    await withMockedModules({
+      axios: axiosMock,
+      '../config/config': createMockConfig(),
+      '../utils/logger': logger,
+    }, async () => {
+      const {sendUpdate} = freshProjectRequire('src/services/apiService.js');
+
+      try {
+        await sendUpdate(
+            'nation',
+            'update',
+            {id: 123, token: 'payload-token'},
+            {messageId: 'message-terminal-400'},
+        );
+      } catch (error) {
+        thrownError = error;
+      }
+    });
+
+    assert.strictEqual(attempts, 1);
+    assert.deepStrictEqual(timeouts, []);
+    assert.strictEqual(thrownError.code, 'DELIVERY_TERMINAL_4XX');
+    assert.strictEqual(thrownError.classification, 'terminal_4xx');
+    assert.strictEqual(thrownError.retryable, false);
+    assert.strictEqual(thrownError.status, 400);
+    assert.strictEqual(thrownError.cause, responseFailure);
+
+    const serializedLogs = JSON.stringify(logs);
+    assert.doesNotMatch(serializedLogs, /response-token|response-secret|payload-token/);
+  });
+}
+
+async function testApiServiceRetriesTransientHttpFailures() {
+  const failures = [
+    ['network failure', new Error('Nexus is down')],
+    ['timeout', Object.assign(new Error('timeout'), {code: 'ECONNABORTED'})],
+    ['request timeout', {response: {status: 408, statusText: 'Request Timeout'}}],
+    ['rate limit', {response: {status: 429, statusText: 'Too Many Requests'} }],
+    ['server failure', {response: {status: 503, statusText: 'Service Unavailable'} }],
+  ];
+
+  for (const [label, failure] of failures) {
+    let attempts = 0;
+    let thrownError;
+    const axiosMock = {
+      create: () => ({
+        post: async () => {
+          attempts += 1;
+          throw failure;
+        },
+      }),
+    };
+
+    await withFakeTimers({runTimeouts: true}, async ({timeouts}) => {
+      await withMockedModules({
+        axios: axiosMock,
+        '../config/config': createMockConfig(),
+        '../utils/logger': silentLogger,
+      }, async () => {
+        const {sendUpdate} = freshProjectRequire('src/services/apiService.js');
+
+        try {
+          await sendUpdate('war', 'update', {id: 456});
+        } catch (error) {
+          thrownError = error;
+        }
+      });
+
+      assert.strictEqual(attempts, 3, label);
+      assert.deepStrictEqual(timeouts, [2000, 4000], label);
+      assert.strictEqual(thrownError.classification, 'retry_exhausted', label);
+    });
+  }
 }
 
 async function testSubscriberBindsPusherEventsAndQueuesPayloads() {
@@ -1354,6 +1506,78 @@ async function testProcessHealthPublishesSanitizedLifecycle() {
   assert.doesNotMatch(serialized, /credential@redis/);
 }
 
+async function testProcessHealthDegradesAndRecoversAfterDeliveryFailures() {
+  const snapshots = [];
+  let heartbeat;
+  let timestamp = Date.parse('2026-08-07T05:00:00.000Z');
+  const deliveryStats = {
+    active: 0,
+    accepted: 3,
+    completed: 0,
+    failed: 3,
+    dropped: 0,
+    pending: 0,
+    maxQueueSize: 1000,
+    concurrency: 3,
+    consecutiveFailures: 0,
+  };
+  const {DELIVERY_FAILURE_THRESHOLD} = freshProjectRequire(
+      'src/processHealthContract.js',
+  );
+  const {createProcessHealth} = freshProjectRequire(
+      'src/services/processHealth.js',
+  );
+  const health = createProcessHealth({
+    config: createMockConfig({
+      pwApiToken: 'health-pw-token',
+      nexusApiToken: 'health-nexus-token',
+    }),
+    now: () => new Date(timestamp += 1000),
+    getDeliveryQueueStats: () => ({...deliveryStats}),
+    writeSnapshot: async (healthFile, snapshot) => snapshots.push(snapshot),
+    setIntervalFn: (handler) => {
+      heartbeat = handler;
+      return {unref: () => {}};
+    },
+    logger: silentLogger,
+  });
+
+  await health.start();
+  await health.markReady();
+
+  deliveryStats.consecutiveFailures = DELIVERY_FAILURE_THRESHOLD;
+  await heartbeat();
+  const degradedSnapshot = snapshots.at(-1);
+  assert.strictEqual(degradedSnapshot.status, 'degraded');
+  assert.strictEqual(
+      degradedSnapshot.delivery.queue.consecutiveFailures,
+      DELIVERY_FAILURE_THRESHOLD,
+  );
+
+  const {validateHealthSnapshot} = freshProjectRequire('src/healthcheck.js');
+  assert.deepStrictEqual(
+      validateHealthSnapshot(degradedSnapshot, {
+        now: Date.parse(degradedSnapshot.heartbeat_at) + 1000,
+      }),
+      {healthy: false, reason: 'delivery_failures'},
+  );
+
+  const serialized = JSON.stringify(degradedSnapshot);
+  assert.doesNotMatch(serialized, /health-pw-token|health-nexus-token|payload/);
+
+  deliveryStats.consecutiveFailures = 0;
+  deliveryStats.completed = 1;
+  await heartbeat();
+  const recoveredSnapshot = snapshots.at(-1);
+  assert.strictEqual(recoveredSnapshot.status, 'ready');
+  assert.deepStrictEqual(
+      validateHealthSnapshot(recoveredSnapshot, {
+        now: Date.parse(recoveredSnapshot.heartbeat_at) + 1000,
+      }),
+      {healthy: true, reason: 'ready'},
+  );
+}
+
 async function testProcessHealthRejectsUnpinnedProvenanceBeforeReadiness() {
   const {createProcessHealth} = freshProjectRequire(
       'src/services/processHealth.js',
@@ -1603,6 +1827,7 @@ async function run() {
     ['delivery queue limits concurrency', testQueueLimitsConcurrency],
     ['delivery queue dead-letters overflow', testQueueOverflowRecordsDeadLetter],
     ['delivery queue dead-letters failed sends', testFailedDeliveryRecordsDeadLetter],
+    ['terminal deliveries dead-letter once with classification', testTerminalDeliveryDeadLettersOnceWithClassification],
     ['delivery queue writes JSONL dead-letter file', testDeliveryQueueWritesDeadLetterFile],
     ['config parses defaults and keeps snapshots disabled', testConfigParsesDefaultsAndKeepsSnapshotsDisabled],
     ['config accepts pinned production provenance', testConfigAcceptsPinnedProductionProvenance],
@@ -1615,6 +1840,8 @@ async function run() {
     ['axios error formatter handles important shapes', testFormatAxiosErrorHandlesImportantShapes],
     ['api service sends update with configured client', testApiServiceSendsUpdateWithConfiguredClient],
     ['api service retries and throws terminal error', testApiServiceRetriesAndThrowsTerminalError],
+    ['api service does not retry terminal HTTP 4xx', testApiServiceDoesNotRetryTerminalHttp4xx],
+    ['api service retries transient HTTP failures', testApiServiceRetriesTransientHttpFailures],
     ['redis stream service publishes versioned message', testRedisStreamServicePublishesVersionedMessage],
     ['redis stream service retains message IDs across retries', testRedisStreamServiceRetainsMessageIdAcrossRetries],
     ['redis stream service uses an open reconnecting client', testRedisStreamServiceUsesOpenReconnectingClient],
@@ -1625,6 +1852,7 @@ async function run() {
     ['pusher service configures singleton and shutdown', testPusherServiceConfiguresSingletonAndShutdown],
     ['pusher service supports named pusher export', testPusherServiceSupportsNamedPusherExport],
     ['process health publishes sanitized lifecycle', testProcessHealthPublishesSanitizedLifecycle],
+    ['process health degrades and recovers after delivery failures', testProcessHealthDegradesAndRecoversAfterDeliveryFailures],
     ['process health rejects unpinned provenance before readiness', testProcessHealthRejectsUnpinnedProvenanceBeforeReadiness],
     ['process health file satisfies healthcheck contract', testProcessHealthFileAndHealthcheckContract],
     ['graceful shutdown reports delivery drain outcome', testGracefulShutdownReportsDrainOutcome],

@@ -3,6 +3,7 @@ const path = require('path');
 const {randomUUID} = require('crypto');
 const packageMetadata = require('../../package.json');
 const {
+  DELIVERY_FAILURE_THRESHOLD,
   HEALTH_SCHEMA_VERSION,
   SERVICE_NAME,
 } = require('../processHealthContract');
@@ -52,25 +53,32 @@ function createProcessHealth(options = {}) {
   let shutdown = null;
   let writeChain = Promise.resolve();
 
-  const snapshot = () => ({
-    schema_version: HEALTH_SCHEMA_VERSION,
-    service: SERVICE_NAME,
-    status: state,
-    pid: process.pid,
-    started_at: startedAt,
-    heartbeat_at: now().toISOString(),
-    stale_after_ms: healthConfig.processHealthStaleAfterMs,
-    build: {
-      version: packageMetadata.version,
-      commit: healthConfig.buildCommit,
-      release: healthConfig.releaseId,
-    },
-    delivery: {
-      driver: healthConfig.deliveryDriver,
-      queue: queueStats(),
-    },
-    ...(shutdown ? {shutdown} : {}),
-  });
+  const snapshot = () => {
+    const deliveryQueueStats = queueStats();
+    const deliveryDegraded =
+      Number(deliveryQueueStats?.consecutiveFailures) >=
+      DELIVERY_FAILURE_THRESHOLD;
+
+    return {
+      schema_version: HEALTH_SCHEMA_VERSION,
+      service: SERVICE_NAME,
+      status: state === 'ready' && deliveryDegraded ? 'degraded' : state,
+      pid: process.pid,
+      started_at: startedAt,
+      heartbeat_at: now().toISOString(),
+      stale_after_ms: healthConfig.processHealthStaleAfterMs,
+      build: {
+        version: packageMetadata.version,
+        commit: healthConfig.buildCommit,
+        release: healthConfig.releaseId,
+      },
+      delivery: {
+        driver: healthConfig.deliveryDriver,
+        queue: deliveryQueueStats,
+      },
+      ...(shutdown ? {shutdown} : {}),
+    };
+  };
 
   const publish = () => {
     const nextSnapshot = snapshot();
