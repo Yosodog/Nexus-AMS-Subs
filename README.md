@@ -1,182 +1,145 @@
 # Nexus AMS Subs
 
-Nexus AMS Subs is a Node.js application that listens to GraphQL subscriptions from the Politics & War API and forwards relevant updates to the Nexus AMS backend. This enables real-time synchronization of in-game nation, alliance, and war data with Nexus AMS, ensuring that alliance management and banking systems remain up to date.
+Nexus AMS Subs listens for Politics & War GraphQL subscription events and sends nation, alliance, and war updates to Nexus AMS. It can deliver events over HTTPS or a signed Redis Stream.
 
-## ⚠️ WARNING ⚠️
-This repository is not ready for production. Use this project at your own risk. This project is currently in the pre-alpha stage.
+## Beta status
 
-## Nexus AMS Repository
-This repository is only for the subscription side. For the Nexus AMS main repository, please go [here](https://github.com/Yosodog/Nexus-AMS).
+Nexus AMS Subs is part of the Nexus AMS beta. Run a Subs beta that is compatible with your Nexus AMS release. The delivery contract is versioned, but compatibility may still change before 1.0.
 
-## Features
-- Subscribes to real-time updates from the Politics & War API.
-- Listens for nation updates and forwards them to Nexus AMS.
-- Uses **Pusher** for handling GraphQL subscriptions.
-- Communicates with Nexus AMS via HTTP requests.
-- Implements automatic reconnection logic for subscriptions.
+This repository contains only the subscription service. The main application is in the [Nexus AMS repository](https://github.com/Yosodog/Nexus-AMS).
 
-## How It Works
-1. **GraphQL Subscriptions**: The application subscribes to Politics & War's GraphQL API to receive real-time updates on nations, alliances, and wars, etc.
-2. **Pusher Service**: Uses Pusher to manage and maintain active subscriptions.
-3. **API Forwarding**: When an update/creation/deletion is received, the application sends an HTTP request to Nexus AMS with the updated data.
-4. **Error Handling & Reconnection**: Automatically attempts to reconnect if a subscription is lost.
-5. **Resilient Delivery**: Retries outbound deliveries and snapshot fetches with exponential backoff and actionable logging.
+## What it does
+
+- Connects to the Politics & War subscription API through Pusher.
+- Receives nation, alliance, and war events.
+- Delivers events to Nexus AMS over HTTPS or Redis Streams.
+- Retries failed HTTP deliveries with backoff.
+- Places failed or overflowed events in a local dead-letter file when dead letters are enabled.
+- Writes a local process heartbeat for readiness checks.
+- Stops cleanly by draining accepted work before exit.
+
+Snapshot retrieval is present but disabled in the beta. Keep `ENABLE_SNAPSHOTS=false` unless you are testing that path.
+
+## Requirements
+
+- Node.js 20 or newer
+- npm
+- A Politics & War API token with subscription access
+- A compatible Nexus AMS beta deployment
+- Redis 6.2 or newer when using Redis Streams
 
 ## Installation
-### Prerequisites
-- Node.js (>= 20.x)
-- npm
 
-### Clone the Repository
+Clone the compatible release, install dependencies, and create the environment file:
+
 ```bash
 git clone https://github.com/Yosodog/Nexus-AMS-Subs.git
 cd Nexus-AMS-Subs
+npm ci
+cp .env.example .env
 ```
 
-### Install Dependencies
-```bash
-npm install
-```
+For a production beta deployment, set `BUILD_COMMIT` to the exact Subs commit and set `NEXUS_RELEASE_ID` to the release identifier used by the matching Nexus installation. Production startup rejects missing or unknown provenance.
 
-### Configuration
-Create a `.env` file in the root directory and configure the following environment variables:
+Start the service with:
 
-```
-# Nexus AMS API
-PW_API_URL=https://api.politicsandwar.com/subscriptions/v1/subscribe
-PW_API_TOKEN=your_api_token
-PUSHER_SOCKET_HOST=socket.politicsandwar.com
-PW_AUTH_URL=https://api.politicsandwar.com/subscriptions/v1/auth
-PUSHER_APP_KEY=a22734a47847a64386c8
-PUSHER_CLUSTER=abc
-NEXUS_API_URL=https://nexus_ams_url.com/api/v1/subs
-NEXUS_API_TOKEN=your_nexus_api_token
-NODE_ENV=development
-DELIVERY_DRIVER=http
-SUBS_REDIS_URL=redis://127.0.0.1:6379/3
-SUBS_REDIS_STREAM=nexus:subscriptions:v1
-SUBS_REDIS_HMAC_SECRET=replace_with_at_least_32_random_characters
-PW_SNAPSHOT_URL=https://api.politicsandwar.com/subscriptions/v1/snapshot
-ENABLE_SNAPSHOTS=false
-SNAPSHOT_INTERVAL_MINUTES=60
-SNAPSHOT_MODELS=nation
-LOG_LEVEL=info
-DELIVERY_QUEUE_CONCURRENCY=3
-DELIVERY_QUEUE_MAX_SIZE=1000
-ENABLE_DEAD_LETTERS=true
-DEAD_LETTER_FILE=data/dead-letter-events.jsonl
-PROCESS_HEALTH_FILE=data/process-health.json
-PROCESS_HEALTH_INTERVAL_MS=15000
-PROCESS_HEALTH_STALE_AFTER_MS=45000
-SHUTDOWN_TIMEOUT_MS=60000
-BUILD_COMMIT=replace_with_immutable_commit
-NEXUS_RELEASE_ID=replace_with_immutable_release_id
-```
-
-You can see an example with .env.example
-
-### Running the Application
 ```bash
 npm start
 ```
 
-The application will initialize subscriptions and begin forwarding updates to Nexus AMS.
+## Configuration
 
-### Optional Configuration
+The defaults and complete setting list are in [.env.example](.env.example). These settings normally require a deployment-specific value:
 
-| Variable | Default | Description |
+| Variable | Purpose |
+| --- | --- |
+| `PW_API_TOKEN` | Politics & War API token used to authorize subscriptions. |
+| `NEXUS_API_URL` | Nexus subscription endpoint used by HTTP delivery. |
+| `NEXUS_API_TOKEN` | Shared bearer token accepted by Nexus. |
+| `NODE_ENV` | Set to `production` on a production host. |
+| `DELIVERY_DRIVER` | Selects `http` or `redis-stream`. |
+| `BUILD_COMMIT` | Exact source commit or image revision. |
+| `NEXUS_RELEASE_ID` | Release identifier shared with the Nexus deployment. |
+
+Common optional settings:
+
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `PUSHER_APP_KEY` | `a22734a47847a64386c8` | Override the default Pusher application key if Politics & War rotates credentials. |
-| `PUSHER_CLUSTER` | `abc` | Set the cluster provided by the Politics & War API. |
-| `PW_SNAPSHOT_URL` | `https://api.politicsandwar.com/subscriptions/v1/snapshot` | Alternate base URL for snapshot requests. |
-| `ENABLE_SNAPSHOTS` | `false` | Snapshot retrieval is currently disabled. Leave this set to `false`. |
-| `SNAPSHOT_INTERVAL_MINUTES` | `60` | Minutes between snapshot refreshes. |
-| `SNAPSHOT_MODELS` | `nation` | Comma-separated list of models to snapshot regularly. |
-| `LOG_LEVEL` | `info` | Minimum log level to write: `debug`, `info`, `warn`, or `error`. |
-| `DELIVERY_QUEUE_CONCURRENCY` | `3` | Maximum concurrent deliveries sent to Nexus AMS. |
-| `DELIVERY_QUEUE_MAX_SIZE` | `1000` | Maximum queued deliveries waiting behind active sends before new events are dead-lettered. |
-| `ENABLE_DEAD_LETTERS` | `true` | Store failed or overflowed deliveries in a JSONL file for later inspection/replay. |
-| `DEAD_LETTER_FILE` | `data/dead-letter-events.jsonl` | File path used for dead-lettered delivery payloads. |
-| `PROCESS_HEALTH_FILE` | `data/process-health.json` | Atomic local readiness/heartbeat file written with mode `0600`. |
-| `PROCESS_HEALTH_INTERVAL_MS` | `15000` | Interval between process heartbeats. |
-| `PROCESS_HEALTH_STALE_AFTER_MS` | `45000` | Maximum heartbeat age accepted by `npm run healthcheck`. |
-| `SHUTDOWN_TIMEOUT_MS` | `60000` | Maximum time allowed for the in-memory delivery queue to drain after SIGTERM/SIGINT. |
-| `NODE_ENV` | production behavior | Set to `development` or `test` only for an explicit local/test path that permits unpinned provenance. |
-| `BUILD_COMMIT` | none outside development/test | Immutable source commit or image revision. Required and must not be empty or `unknown` outside development/test. |
-| `NEXUS_RELEASE_ID` | none outside development/test | Server-assigned immutable release identifier. Required and must not be empty or `unknown` outside development/test. |
-| `DELIVERY_DRIVER` | `http` | Active Nexus delivery transport: `http` or `redis-stream`. Exactly one driver is active. |
-| `SUBS_REDIS_URL` | none | Redis connection URL required by `redis-stream`; use `rediss://` for TLS endpoints. |
-| `SUBS_REDIS_STREAM` | `nexus:subscriptions:v1` | Redis stream receiving versioned PW deliveries. |
-| `SUBS_REDIS_HMAC_SECRET` | none | Shared secret of at least 32 characters required by `redis-stream`; it must exactly match Nexus AMS. |
+| `PUSHER_APP_KEY` | `a22734a47847a64386c8` | Pusher application key supplied by Politics & War. |
+| `PUSHER_CLUSTER` | `abc` | Pusher cluster supplied by Politics & War. |
+| `PW_SNAPSHOT_URL` | Politics & War snapshot endpoint | Overrides the snapshot endpoint. |
+| `ENABLE_SNAPSHOTS` | `false` | Enables the experimental snapshot path. Leave this off for the beta. |
+| `SNAPSHOT_INTERVAL_MINUTES` | `60` | Minutes between snapshot requests. |
+| `SNAPSHOT_MODELS` | `nation` | Comma-separated snapshot model list. |
+| `LOG_LEVEL` | `info` | Minimum `debug`, `info`, `warn`, or `error` level to write. |
+| `DELIVERY_QUEUE_CONCURRENCY` | `3` | Maximum number of active deliveries. |
+| `DELIVERY_QUEUE_MAX_SIZE` | `1000` | Maximum number of deliveries waiting behind active work. |
+| `ENABLE_DEAD_LETTERS` | `true` | Writes failed or overflowed deliveries to a JSONL file. |
+| `DEAD_LETTER_FILE` | `data/dead-letter-events.jsonl` | Dead-letter file path. |
+| `PROCESS_HEALTH_FILE` | `data/process-health.json` | Local process heartbeat path. |
+| `PROCESS_HEALTH_INTERVAL_MS` | `15000` | Heartbeat interval. |
+| `PROCESS_HEALTH_STALE_AFTER_MS` | `45000` | Maximum heartbeat age accepted by the health check. |
+| `SHUTDOWN_TIMEOUT_MS` | `60000` | Maximum drain time after `SIGTERM` or `SIGINT`. |
 
-### Redis Streams Delivery
+## HTTP delivery
 
-Set `DELIVERY_DRIVER=redis-stream` to publish each Politics & War single or bulk
-delivery as one Redis Stream entry. Nexus AMS must run `php artisan
-subs:consume-stream` against the same Redis URL and stream. Redis is transport
-only: Nexus acknowledges and removes entries after accepting the work.
+HTTP is the default delivery driver. Set:
 
-Keep `NEXUS_API_URL` and `NEXUS_API_TOKEN` configured as operational backup
-settings. There is no automatic fallback or dual publishing. To return to HTTP,
-stop this service, set `DELIVERY_DRIVER=http`, and restart it after the Redis
-stream has drained or its pending entries have been accounted for.
+```dotenv
+DELIVERY_DRIVER=http
+NEXUS_API_URL=https://nexus.example.com/api/v1/subs
+NEXUS_API_TOKEN=replace-with-the-token-from-nexus
+```
 
-Each Redis Stream entry is signed with HMAC-SHA256 over the documented
-versioned envelope fields in this order: `message_id`, `schema_version`,
-`model`, `event`, `source`, `received_at`, and `payload`; `signature` is the
-resulting hex digest. Configure the same `SUBS_REDIS_HMAC_SECRET` in this
-service and Nexus AMS before selecting `redis-stream`; either process refuses
-to start the transport when the secret is missing or shorter than 32
-characters.
+The service retries failed deliveries with backoff. Events that exhaust their attempts are written to the dead-letter file when dead letters are enabled.
 
-For separate servers, use a private network or a TLS `rediss://` endpoint with
-restricted Redis credentials. Never expose an unauthenticated Redis port to the
-public internet.
+## Redis Streams delivery
 
-### Process readiness and shutdown
+Redis Streams can keep subscription traffic off the public HTTP endpoint. Configure the same Redis endpoint, stream name, and HMAC secret in Subs and Nexus:
 
-The service writes an atomic JSON heartbeat to `PROCESS_HEALTH_FILE`. It contains
-only the service state, package/build identifiers, active delivery driver, and
-bounded queue counters; URLs, API credentials, Redis credentials, event
-payloads, and dead letters are excluded. The file is process-local operational
-state and may be placed on a writable runtime mount.
+```dotenv
+DELIVERY_DRIVER=redis-stream
+SUBS_REDIS_URL=redis://127.0.0.1:6379/3
+SUBS_REDIS_STREAM=nexus:subscriptions:v1
+SUBS_REDIS_HMAC_SECRET=replace-with-at-least-32-random-characters
+```
 
-The queue health data includes a capped `consecutiveFailures` signal. After
-three consecutive delivery jobs fail, the snapshot reports `degraded` and the
-health check returns `delivery_failures`; a successful delivery resets the
-signal and allows readiness to recover. A single historical failure does not
-permanently poison health.
+Nexus must run `php artisan subs:consume-stream` against the same Redis instance. The HMAC secret must contain at least 32 characters. Each stream entry signs the versioned `message_id`, `schema_version`, `model`, `event`, `source`, `received_at`, and `payload` fields.
 
-Use the same working directory or `PROCESS_HEALTH_FILE` value when probing it:
+Keep `NEXUS_API_URL` and `NEXUS_API_TOKEN` configured as manual fallback settings. The service does not publish to HTTP and Redis at the same time, and it does not switch drivers automatically. To return to HTTP, stop Subs, account for pending stream entries, change `DELIVERY_DRIVER`, and restart the process.
+
+Use a private network or a TLS `rediss://` endpoint when Redis is on another server. Do not expose an unauthenticated Redis port to the internet.
+
+## Readiness and shutdown
+
+The service writes an atomic heartbeat to `PROCESS_HEALTH_FILE` with mode `0600`. The file contains process state, build identifiers, the active delivery driver, and bounded queue counters. It does not include URLs, credentials, event payloads, or dead-letter contents.
+
+Probe the running process from the same working directory and user:
 
 ```bash
 npm run healthcheck
 ```
 
-The command exits nonzero when the file is missing, malformed, stale, from an
-unsupported contract, has unpinned production provenance, or reports any state
-other than `ready`. A SIGTERM or SIGINT first disconnects Pusher, then drains
-accepted deliveries, closes the active transport, records the final state, and
-exits. Configure the process
-manager's stop grace period above `SHUTDOWN_TIMEOUT_MS`; with the default,
-allow at least 70 seconds. A drain timeout or transport-close failure exits
-nonzero so supervision does not report a clean shutdown after possible loss.
+The command exits with an error when the heartbeat is missing, malformed, stale, reports degraded delivery, or contains invalid production provenance. Three consecutive delivery failures set the process state to `degraded`; a successful delivery clears that condition.
 
+On `SIGTERM` or `SIGINT`, the process disconnects from Pusher, drains accepted deliveries, closes the active transport, records its final state, and exits. Set the process manager's stop grace period above `SHUTDOWN_TIMEOUT_MS`. The default needs at least 70 seconds.
 
-## Contributing
-1. Fork the repository.
-2. Create a new branch: `git checkout -b feature-branch-name`.
-3. Make your changes and commit them: `git commit -m 'Description of changes'`.
-4. Push to the branch: `git push origin feature-branch-name`.
-5. Open a pull request.
+## Development
 
-## Bug Reports & Issues
-If you encounter any bugs or have feature requests, please create an issue on [GitHub Issues](https://github.com/Yosodog/Nexus-AMS-Subs/issues).
+Run the test suite with:
 
-Issues created here should ONLY be for the subscription project. Please use the Nexus AMS repo for issues relating to the actual application.
+```bash
+npm test
+```
+
+Tests use local fixtures and fakes. They do not require a live Politics & War or Nexus deployment.
+
+## Issues and support
+
+Use [Nexus AMS Subs issues](https://github.com/Yosodog/Nexus-AMS-Subs/issues) for subscription connection, delivery, dead-letter, and process health problems. Use the [main Nexus AMS issue tracker](https://github.com/Yosodog/Nexus-AMS/issues) for application behavior.
+
+Include the Subs commit, Nexus release ID, active delivery driver, and redacted logs in bug reports. Do not post API tokens, Redis credentials, HMAC secrets, or event payloads that contain private data.
 
 ## License
-This project is open-source and available under the GPL-3.0 License.
 
-## Support
-If you need assistance or you have questions about this project, please contact Yosodog on Discord. You can join BK's server [here](https://discord.com/invite/VrJFQMBH2R). You can also create an issue here on Github for questions relating to the project.
+Nexus AMS Subs is licensed under GPL-3.0. See [LICENSE](LICENSE) for the full license text.
