@@ -1,4 +1,5 @@
 const config = require('../config/config');
+const fs = require('fs');
 
 const LEVELS = {
   debug: 10,
@@ -11,6 +12,35 @@ const activeLevel =
   LEVELS[config.logLevel?.toLowerCase()] !== undefined
     ? config.logLevel.toLowerCase()
     : 'info';
+
+function collectConfiguredSecrets() {
+  const values = [
+    config.pwApiToken,
+    config.nexusApiToken,
+    config.subsRedisHmacSecret,
+  ];
+
+  for (const key of [
+    'PW_API_TOKEN',
+    'NEXUS_API_TOKEN',
+    'SUBS_REDIS_HMAC_SECRET',
+  ]) {
+    const filePath = process.env[`${key}_FILE`];
+    if (!filePath) {
+      continue;
+    }
+
+    try {
+      values.push(fs.readFileSync(filePath, 'utf8').trim());
+    } catch {
+      // Configuration validation reports the missing file without logging it.
+    }
+  }
+
+  return values.filter((value) => typeof value === 'string' && value.length > 0);
+}
+
+const configuredSecrets = collectConfiguredSecrets();
 
 function serializeMetaValue(value) {
   if (value === null || value === undefined) {
@@ -32,17 +62,23 @@ function serializeMetaValue(value) {
   return String(value);
 }
 
+function redactSecrets(value) {
+  return configuredSecrets.reduce((result, secret) => {
+    return result.replaceAll(secret, '[REDACTED]');
+  }, value);
+}
+
 function formatMeta(meta) {
   if (meta === undefined) {
     return '';
   }
 
   if (meta instanceof Error) {
-    return serializeMetaValue(meta);
+    return redactSecrets(serializeMetaValue(meta));
   }
 
   if (Array.isArray(meta)) {
-    return meta.map(serializeMetaValue).join(', ');
+    return redactSecrets(meta.map(serializeMetaValue).join(', '));
   }
 
   if (typeof meta === 'object') {
@@ -50,12 +86,12 @@ function formatMeta(meta) {
     if (entries.length === 0) {
       return '';
     }
-    return entries
+    return redactSecrets(entries
         .map(([key, value]) => `${key}=${serializeMetaValue(value)}`)
-        .join(' ');
+        .join(' '));
   }
 
-  return serializeMetaValue(meta);
+  return redactSecrets(serializeMetaValue(meta));
 }
 
 function shouldLog(level) {

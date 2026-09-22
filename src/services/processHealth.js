@@ -3,6 +3,8 @@ const path = require('path');
 const {randomUUID} = require('crypto');
 const packageMetadata = require('../../package.json');
 const {
+  COMPONENT_CONTRACT_VERSION,
+  COMPONENT_ID,
   DELIVERY_FAILURE_THRESHOLD,
   HEALTH_SCHEMA_VERSION,
   SERVICE_NAME,
@@ -59,10 +61,22 @@ function createProcessHealth(options = {}) {
       Number(deliveryQueueStats?.consecutiveFailures) >=
       DELIVERY_FAILURE_THRESHOLD;
 
+    const healthState = state === 'ready'
+      ? (deliveryDegraded ? 'degraded' : 'healthy')
+      : state;
+
     return {
       schema_version: HEALTH_SCHEMA_VERSION,
+      contract_version: COMPONENT_CONTRACT_VERSION,
+      component_id: COMPONENT_ID,
       service: SERVICE_NAME,
       status: state === 'ready' && deliveryDegraded ? 'degraded' : state,
+      runtime_state: state,
+      health_state: healthState,
+      reachable: !['stopped', 'failed'].includes(state),
+      installed: true,
+      enabled: healthConfig.enabled !== false,
+      configuration_ready: healthConfig.configurationReady !== false,
       pid: process.pid,
       started_at: startedAt,
       heartbeat_at: now().toISOString(),
@@ -72,6 +86,8 @@ function createProcessHealth(options = {}) {
         commit: healthConfig.buildCommit,
         release: healthConfig.releaseId,
       },
+      version: packageMetadata.version,
+      release_id: healthConfig.releaseId,
       delivery: {
         driver: healthConfig.deliveryDriver,
         queue: deliveryQueueStats,

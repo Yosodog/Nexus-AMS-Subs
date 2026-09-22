@@ -1,0 +1,47 @@
+[Unit]
+Description=Nexus AMS Subs
+Documentation=https://github.com/Yosodog/Nexus-AMS-Subs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nexus-subs
+Group=nexus-subs
+WorkingDirectory=/opt/nexus/nexus-subs/current
+EnvironmentFile=/etc/nexus/nexus-subs/environment
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=
+Environment=PATH=/usr/bin:/bin
+Environment=PROCESS_HEALTH_FILE=/var/lib/nexus/nexus-subs/process-health.json
+Environment=DEAD_LETTER_FILE=/var/lib/nexus/nexus-subs/dead-letter-events.jsonl
+ExecStart=/usr/bin/node /opt/nexus/nexus-subs/current/src/index.js
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=70s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/nexus/nexus-subs
+LimitNOFILE=4096
+MemoryMax=512M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

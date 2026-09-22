@@ -1,6 +1,8 @@
 const fs = require('fs/promises');
 const path = require('path');
 const {
+  COMPONENT_CONTRACT_VERSION,
+  COMPONENT_ID,
   DELIVERY_FAILURE_THRESHOLD,
   HEALTH_SCHEMA_VERSION,
   SERVICE_NAME,
@@ -48,6 +50,14 @@ function validateHealthSnapshot(snapshot, options = {}) {
     return {healthy: false, reason: 'unsupported_contract'};
   }
 
+  if (
+    snapshot.contract_version !== undefined &&
+    (snapshot.contract_version !== COMPONENT_CONTRACT_VERSION ||
+      snapshot.component_id !== COMPONENT_ID)
+  ) {
+    return {healthy: false, reason: 'unsupported_contract'};
+  }
+
   if (snapshot.status !== 'ready' && snapshot.status !== 'degraded') {
     return {healthy: false, reason: 'not_ready'};
   }
@@ -58,6 +68,24 @@ function validateHealthSnapshot(snapshot, options = {}) {
     typeof snapshot.build?.release !== 'string'
   ) {
     return {healthy: false, reason: 'missing_build_metadata'};
+  }
+
+  if (
+    snapshot.contract_version !== undefined &&
+    (typeof snapshot.version !== 'string' ||
+      typeof snapshot.release_id !== 'string' ||
+      typeof snapshot.runtime_state !== 'string' ||
+      typeof snapshot.health_state !== 'string' ||
+      typeof snapshot.reachable !== 'boolean' ||
+      typeof snapshot.installed !== 'boolean' ||
+      typeof snapshot.enabled !== 'boolean' ||
+      typeof snapshot.configuration_ready !== 'boolean')
+  ) {
+    return {healthy: false, reason: 'missing_component_metadata'};
+  }
+
+  if (snapshot.configuration_ready === false) {
+    return {healthy: false, reason: 'configuration_not_ready'};
   }
 
   if (

@@ -474,6 +474,39 @@ async function testConfigParsesDefaultsAndKeepsSnapshotsDisabled() {
   });
 }
 
+async function testConfigReadsCredentialFilesBeforeEnvironmentValues() {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexus-subs-credentials-'));
+  const pwTokenFile = path.join(tempDir, 'pw-api-token');
+  const nexusTokenFile = path.join(tempDir, 'nexus-api-token');
+  const hmacFile = path.join(tempDir, 'redis-hmac');
+
+  await fs.writeFile(pwTokenFile, 'file-pw-token\n', {mode: 0o600});
+  await fs.writeFile(nexusTokenFile, 'file-nexus-token\n', {mode: 0o600});
+  await fs.writeFile(hmacFile, `${'h'.repeat(32)}\n`, {mode: 0o600});
+
+  try {
+    await withEnv({
+      ...REQUIRED_ENV_DEFAULTS,
+      PW_API_TOKEN: 'environment-pw-token',
+      PW_API_TOKEN_FILE: pwTokenFile,
+      NEXUS_API_TOKEN: 'environment-nexus-token',
+      NEXUS_API_TOKEN_FILE: nexusTokenFile,
+      SUBS_REDIS_HMAC_SECRET: 'e'.repeat(32),
+      SUBS_REDIS_HMAC_SECRET_FILE: hmacFile,
+      NODE_ENV: 'test',
+      DELIVERY_DRIVER: 'http',
+    }, async () => {
+      const config = freshProjectRequire('src/config/config.js');
+
+      assert.strictEqual(config.pwApiToken, 'file-pw-token');
+      assert.strictEqual(config.nexusApiToken, 'file-nexus-token');
+      assert.strictEqual(config.subsRedisHmacSecret, 'h'.repeat(32));
+    });
+  } finally {
+    await fs.rm(tempDir, {recursive: true, force: true});
+  }
+}
+
 async function testConfigAcceptsPinnedProductionProvenance() {
   await withEnv({
     ...REQUIRED_ENV_DEFAULTS,
@@ -1498,6 +1531,29 @@ async function testProcessHealthPublishesSanitizedLifecycle() {
     commit: 'test-commit',
     release: 'test-release',
   });
+  assert.deepStrictEqual({
+    contract_version: snapshots[1].contract_version,
+    component_id: snapshots[1].component_id,
+    runtime_state: snapshots[1].runtime_state,
+    health_state: snapshots[1].health_state,
+    reachable: snapshots[1].reachable,
+    installed: snapshots[1].installed,
+    enabled: snapshots[1].enabled,
+    configuration_ready: snapshots[1].configuration_ready,
+    version: snapshots[1].version,
+    release_id: snapshots[1].release_id,
+  }, {
+    contract_version: 1,
+    component_id: 'nexus-subs',
+    runtime_state: 'ready',
+    health_state: 'healthy',
+    reachable: true,
+    installed: true,
+    enabled: true,
+    configuration_ready: true,
+    version: '1.0.0',
+    release_id: 'test-release',
+  });
   assert.strictEqual(snapshots[1].delivery.driver, 'http');
   assert.strictEqual(snapshots[1].delivery.queue.accepted, 2);
 
@@ -1830,6 +1886,7 @@ async function run() {
     ['terminal deliveries dead-letter once with classification', testTerminalDeliveryDeadLettersOnceWithClassification],
     ['delivery queue writes JSONL dead-letter file', testDeliveryQueueWritesDeadLetterFile],
     ['config parses defaults and keeps snapshots disabled', testConfigParsesDefaultsAndKeepsSnapshotsDisabled],
+    ['config reads credential files before environment values', testConfigReadsCredentialFilesBeforeEnvironmentValues],
     ['config accepts pinned production provenance', testConfigAcceptsPinnedProductionProvenance],
     ['config allows unpinned provenance only in development', testConfigAllowsUnpinnedProvenanceOnlyInDevelopment],
     ['config rejects unpinned production provenance', testConfigRejectsUnpinnedProductionProvenance],

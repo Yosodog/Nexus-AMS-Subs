@@ -4,7 +4,9 @@ Nexus AMS Subs listens for Politics & War GraphQL subscription events and sends 
 
 ## Beta status
 
-Nexus AMS Subs is part of the Nexus AMS beta. Run a Subs beta that is compatible with your Nexus AMS release. The delivery contract is versioned, but compatibility may still change before 1.0.
+Nexus AMS Subs is part of the Nexus AMS beta. Managed installations use the
+same stable Nexus release tag for Setup, Core, Subs, and Discord. The delivery
+contract is versioned, but compatibility may still change before 1.0.
 
 This repository contains only the subscription service. The main application is in the [Nexus AMS repository](https://github.com/Yosodog/Nexus-AMS).
 
@@ -30,6 +32,19 @@ Snapshot retrieval is present but disabled in the beta. Keep `ENABLE_SNAPSHOTS=f
 
 ## Installation
 
+For the supported single-server or application-plus-Subs profiles, use
+[Nexus Setup](https://github.com/Yosodog/Nexus-Setup) instead of cloning this
+repository: `sudo nexus install` installs Subs with Core, while
+`nexus component install subs` adds it to a supported local web-only host.
+The Admin Software page offers that local action too. Setup reuses the local
+Core Politics & War credential, generates the internal token, and runs Subs as
+the dedicated `nexus-subs` user. `nexus update` advances every installed local
+component to the same tag; `nexus cleanup` keeps the current and previous code
+releases. No automatic database backup is made. Subs-only remote hosts remain
+CLI-managed; the GUI does not remotely install or update them.
+
+The steps below are for manual development or independently operated hosts.
+
 Clone the compatible release, install dependencies, and create the environment file:
 
 ```bash
@@ -39,7 +54,7 @@ npm ci
 cp .env.example .env
 ```
 
-For a production beta deployment, set `BUILD_COMMIT` to the exact Subs commit and set `NEXUS_RELEASE_ID` to the release identifier used by the matching Nexus installation. Production startup rejects missing or unknown provenance.
+For a production deployment, set `BUILD_COMMIT` to the exact Subs commit and set `NEXUS_RELEASE_ID` to the shared Nexus release tag used by the matching installation. Production startup rejects missing or placeholder build identity. Nexus Setup installs the service from the fixed `nexus-subs.tar.gz` asset on the matching official GitHub Release rather than building the live checkout.
 
 Start the service with:
 
@@ -54,8 +69,10 @@ The defaults and complete setting list are in [.env.example](.env.example). Thes
 | Variable | Purpose |
 | --- | --- |
 | `PW_API_TOKEN` | Politics & War API token used to authorize subscriptions. |
+| `PW_API_TOKEN_FILE` | Root-owned credential file containing the Politics & War token; takes precedence over `PW_API_TOKEN`. |
 | `NEXUS_API_URL` | Nexus subscription endpoint used by HTTP delivery. |
 | `NEXUS_API_TOKEN` | Shared bearer token accepted by Nexus. |
+| `NEXUS_API_TOKEN_FILE` | Root-owned credential file containing the Nexus token; takes precedence over `NEXUS_API_TOKEN`. |
 | `NODE_ENV` | Set to `production` on a production host. |
 | `DELIVERY_DRIVER` | Selects `http` or `redis-stream`. |
 | `BUILD_COMMIT` | Exact source commit or image revision. |
@@ -80,6 +97,7 @@ Common optional settings:
 | `PROCESS_HEALTH_INTERVAL_MS` | `15000` | Heartbeat interval. |
 | `PROCESS_HEALTH_STALE_AFTER_MS` | `45000` | Maximum heartbeat age accepted by the health check. |
 | `SHUTDOWN_TIMEOUT_MS` | `60000` | Maximum drain time after `SIGTERM` or `SIGINT`. |
+| `SUBS_REDIS_HMAC_SECRET_FILE` | — | Root-owned credential file containing the Redis HMAC secret; takes precedence over `SUBS_REDIS_HMAC_SECRET`. |
 
 ## HTTP delivery
 
@@ -114,15 +132,23 @@ Use a private network or a TLS `rediss://` endpoint when Redis is on another ser
 
 The service writes an atomic heartbeat to `PROCESS_HEALTH_FILE` with mode `0600`. The file contains process state, build identifiers, the active delivery driver, and bounded queue counters. It does not include URLs, credentials, event payloads, or dead-letter contents.
 
+The heartbeat implements the first-party component health contract. In addition to the legacy `build` object, it includes the stable component ID (`nexus-subs`), contract version, package version, release ID, runtime and health states, reachability, enabled state, and configuration readiness. Nexus Setup uses these fields when displaying component inventory. Older schema-compatible readers may continue to read the legacy fields during migration.
+
 Probe the running process from the same working directory and user:
 
 ```bash
 npm run healthcheck
 ```
 
-The command exits with an error when the heartbeat is missing, malformed, stale, reports degraded delivery, or contains invalid production provenance. Three consecutive delivery failures set the process state to `degraded`; a successful delivery clears that condition.
+The command exits with an error when the heartbeat is missing, malformed, stale, reports degraded delivery, or contains an invalid release/build identity. Three consecutive delivery failures set the process state to `degraded`; a successful delivery clears that condition.
 
 On `SIGTERM` or `SIGINT`, the process disconnects from Pusher, drains accepted deliveries, closes the active transport, records its final state, and exits. Set the process manager's stop grace period above `SHUTDOWN_TIMEOUT_MS`. The default needs at least 70 seconds.
+
+### Managed systemd deployment
+
+The fixed unit template at [`deploy/systemd/nexus-subs.service`](deploy/systemd/nexus-subs.service) runs Subs as the dedicated `nexus-subs` account. Nexus Setup supplies the account, immutable release path, writable state directory, and root-owned credential files. Its root-owned environment file contains only paths to the credentials consumed through the `*_FILE` settings; secret values never appear in command-line arguments or the service environment. Do not modify the unit from the Admin GUI.
+
+Release automation builds a production tarball with `npm ci --omit=dev --ignore-scripts` and records the component contract and release identity. It publishes the fixed `nexus-subs.tar.gz` asset directly to the official GitHub Release. Nexus Setup trusts that official release and verifies the identity embedded in the extracted artifact; deployment signatures, checksum sidecars, attestations, and TUF metadata are intentionally not part of this updater.
 
 ## Development
 
