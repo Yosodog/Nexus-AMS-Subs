@@ -2,9 +2,9 @@
 logs
 *.log
 .DS_Store
-data/dead-letter-events.jsonl
-data/dead-letter-events.*.jsonl
-data/process-health.json*
+**/data/dead-letter-events.jsonl
+**/data/dead-letter-events.*.jsonl
+**/data/process-health.json*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
